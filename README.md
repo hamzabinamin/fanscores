@@ -1,56 +1,46 @@
-# Welcome to your Expo app 👋
+# FanScores
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A modern, high-performance sports fixture management and live score tracking mobile application built with React Native, Expo Router, and TypeScript. FanScores allows sports administrators and enthusiasts to cleanly create fixtures, filter live games by sport or gender profiles, and manage teams seamlessly across both dark and light modes.
 
-## Get started
+---
 
-1. Install dependencies
+## 📱 Features
 
-   ```bash
-   npm install
-   ```
+- **Dynamic Theme Engine**: Full system-wide support for **Dark Mode** and **Light Mode** powered by React Context and memory-optimized design tokens.
+- **Fixture Creation & Management**: Comprehensive, grid-aligned match creator supporting multi-tiered attribute selections (Sport, Gender, Level, and Type clusters).
+- **Interactive Team Management**: Real-time state-driven modal views that transition smoothly between listing available clubs and triggering live, inline team-card editing configurations.
+- **Advanced Target Filtering**: Fast, responsive chip-based multi-tag selection arrays to filter local matches instantly by sports category or gender divisions.
+- **Robust Routing Tree**: Built natively atop the **Expo Router API**, leveraging optimized directory-based deep link routing handles (`(tabs)`, `(auth)`).
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+## 🛠️ Tech Stack & Dependencies
 
-In the output, you'll find options to open the app in a
+- **Framework**: [React Native](https://reactnative.dev/) with [Expo (SDK 51+)](https://expo.dev/)
+- **Navigation Engine**: [Expo Router v3](https://docs.expo.dev/router/introduction/) (File-system based router)
+- **Language**: [TypeScript](https://www.typescript.org/) (Strictly typed layout and components)
+- **Icons Asset Pipeline**: [@expo/vector-icons (Ionicons)](https://docs.expo.dev/guides/icons/)
+- **Safe Area Rendering**: [react-native-safe-area-context](https://github.com/th3rdwave/react-native-safe-area-context)
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+---
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## 📂 Project Directory Layout
 
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-### Other setup steps
-
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```text
+src/
+├── app/                  # Main Expo Router Application Tree
+│   ├── (auth)/           # Authentication Routing Layer
+│   │   ├── _layout.tsx   # Auth Stack Navigator Configuration
+│   │   ├── login.tsx     # OTP Request and Sign-In Screen
+│   │   └── signup.tsx    # User Creation Dashboard
+│   ├── (tabs)/           # Core Application App Tab Layer
+│   │   ├── _layout.tsx   # Tab Bar Controller & Theme Mapping
+│   │   ├── index.tsx     # Home Screen View (Fixtures Ticker)
+│   │   ├── add-game.tsx  # Create Fixture Control Panel
+│   │   ├── filters.tsx   # Match Query Tag Filters
+│   │   └── more.tsx      # System Controls & Overlay Form Modals
+│   └── _layout.tsx       # Root Engine Entry Point & Context Providers
+├── components/           # Reusable Component Infrastructure
+│   └── GlobalHeader.tsx  # Dynamic Navigation Bar & Country Selector
+└── context/              # Global Application Architecture State
+    └── ThemeContext.tsx  # Context API Provider & Design Tokens Layout
