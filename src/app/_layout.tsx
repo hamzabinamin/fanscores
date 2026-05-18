@@ -1,16 +1,29 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import React from 'react';
-import { useColorScheme } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ThemeProvider, useAppTheme } from '../context/ThemeContext';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+function RootStack() {
+  const { theme } = useAppTheme();
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
+    <>
+      {/* Dynamic Status Bar matching the current top-bar depth */}
+      <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="(auth)" />
+      </Stack>
+    </>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <RootStack />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
