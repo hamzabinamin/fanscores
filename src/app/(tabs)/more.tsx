@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import auth from '@react-native-firebase/auth';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Alert, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import GlobalHeader from '../../components/GlobalHeader';
 import { useAppTheme } from '../../context/ThemeContext'; // 🌟 Import your theme hook
@@ -28,7 +29,19 @@ export default function MoreScreen() {
       "Are you sure you want to logout from FanScores?",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Logout", style: "destructive", onPress: () => router.replace('/(auth)/login') }
+        {
+          text: "Logout",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await auth().signOut();
+              // No router call — RootStack's useEffect redirects to login automatically.
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Could not log out. Please try again.');
+            }
+          },
+        },
       ]
     );
   };

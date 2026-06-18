@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "331630707209",
+    "project_id": "fanscores",
+    "storage_bucket": "fanscores.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:331630707209:android:e3d7beaa119cf8436c6ed8",
+        "android_client_info": {
+          "package_name": "com.fanscores.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDfCw7JT77w0dAMX9fFxU_jEmUV5vI5g-A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

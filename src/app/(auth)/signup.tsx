@@ -1,26 +1,47 @@
 import { useRouter } from 'expo-router';
+import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
 import React, { useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { useAppTheme } from '../../context/ThemeContext'; // 🌟 Import your theme hook
+import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { useAppTheme } from '../../context/ThemeContext';
 
 export default function SignupScreen() {
-  const { colors, theme } = useAppTheme(); // 🌟 Grab active dynamic colors
+  const { colors, theme } = useAppTheme(); 
   const [username, setUsername] = useState('');
-  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const handleSignup = () => {
-    if (!username || !phone) {
-      alert("Please fill out all fields.");
+  const handleCompleteRegistration = async () => {
+    if (!username.trim()) {
+      Alert.alert("Error", "Please enter a username.");
       return;
     }
-    // Your custom creation logic will go here
-    router.replace('/(tabs)');
+
+    setLoading(true);
+    const user = auth().currentUser;
+
+    if (user) {
+      try {
+        await firestore()
+          .collection("Users")
+          .doc(user.uid)
+          .set({
+            username: username.trim(),
+            phone: user.phoneNumber,
+            createdAt: firestore.FieldValue.serverTimestamp(),
+        });
+        
+        router.replace('/(tabs)');
+      } catch (error) {
+        Alert.alert("Error", "Could not save profile. Please try again.");
+        setLoading(false);
+      }
+    }
   };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Text style={[styles.title, { color: colors.text }]}>Create Account</Text>
+      <Text style={[styles.title, { color: colors.text }]}>Complete Registration</Text>
       <Text style={[styles.subtitle, { color: colors.textMuted }]}>
         Join FanScores to start managing custom games and sports data.
       </Text>
@@ -36,29 +57,18 @@ export default function SignupScreen() {
         onChangeText={setUsername}
       />
 
-      {/* Phone Field */}
-      <Text style={[styles.label, { color: colors.text }]}>Phone Number</Text>
-      <TextInput 
-        style={[styles.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-        placeholder="+1 234 567 890" 
-        placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
-        keyboardType="phone-pad"
-        value={phone}
-        onChangeText={setPhone}
-      />
-
       <TouchableOpacity 
-        style={styles.primaryButton} 
-        onPress={handleSignup}
+        style={[styles.primaryButton, loading && { opacity: 0.7 }]}
+        onPress={handleCompleteRegistration}
+        disabled={loading}
       >
-        <Text style={styles.buttonText}>Create Account</Text>
+       {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Continue</Text>
+        )}
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 20 }}>
-        <Text style={[styles.linkText, { color: colors.textMuted }]}>
-          Already have an account? <Text style={{ color: '#3b82f6', fontWeight: '500' }}>Login</Text>
-        </Text>
-      </TouchableOpacity>
     </View>
   );
 }
