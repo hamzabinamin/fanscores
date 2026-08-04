@@ -1,10 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import auth from '@react-native-firebase/auth';
+import storage from '@react-native-firebase/storage';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Alert, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import GlobalHeader from '../../components/GlobalHeader';
-import { useAppTheme } from '../../context/ThemeContext'; // 🌟 Import your theme hook
+import { useAppTheme } from '../../context/ThemeContext';
+import {
+  newTeamPayload,
+  Team,
+  teamDisplayName,
+  teamFromDoc,
+  teamLocation,
+  teamsCollection,
+  updateTeamPayload,
+} from '../../models/Team';
 
 export default function MoreScreen() {
   const router = useRouter();
@@ -17,11 +28,92 @@ export default function MoreScreen() {
   const [addResultVisible, setAddResultVisible] = useState(false);
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
 
-  // Dummy teams for the list
-  const [teams, setTeams] = useState([
-    { id: '1', name: 'Paarl Boys', country: 'Hong Kong', town: 'Paarl', region: 'South Africa', logo: 'https://placeholder.com/100' },
-    { id: '2', name: 'Paarl Gim', country: 'Hong Kong', town: 'Paarl', region: 'South Africa', logo: 'https://placeholder.com/100' },
-  ]);
+  const [teamName, setTeamName] = useState('');
+  const [shortName, setShortName] = useState('');
+  const [town, setTown] = useState('');
+  const [county, setCounty] = useState('');
+  const [logoUri, setLogoUri] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [teams, setTeams] = useState<Team[]>([]); 
+  const [loadingTeams, setLoadingTeams] = useState(true);
+  const [editForm, setEditForm] = useState({ name: '', shortName: '', town: '', county: '' });
+  const [editLogoUri, setEditLogoUri] = useState<string | null>(null); // newly picked local image
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  useEffect(() => {
+    const uid = auth().currentUser?.uid;
+    if (!uid) { setLoadingTeams(false); return; }
+
+    const unsub = teamsCollection()
+      .where('createdBy', '==', uid)
+      .onSnapshot(
+        (snap) => {
+          setTeams(snap.docs.map(teamFromDoc).sort((a, b) => a.name.localeCompare(b.name)));
+          setLoadingTeams(false);
+        },
+        (err) => { console.error('Teams fetch error:', err); setLoadingTeams(false); }
+      );
+    return () => unsub();
+  }, []);
+
+  const pickLogo = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow photo access to upload a logo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (!result.canceled) {
+      setLogoUri(result.assets[0].uri);
+    }
+  };
+
+  const resetForm = () => {
+    setTeamName(''); setShortName(''); setTown(''); setCounty(''); setLogoUri(null);
+  };
+
+  const handleSaveTeam = async () => {
+    if (!teamName.trim()) {
+      Alert.alert('Missing info', 'Please enter a team name.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      let logoUrl: string | null = null;
+
+      // Upload the logo to Firebase Storage (if one was chosen)
+      if (logoUri) {
+        const uid = auth().currentUser?.uid ?? 'anon';
+        const path = `teamLogos/${uid}_${Date.now()}.jpg`;
+        const ref = storage().ref(path);
+        await ref.putFile(logoUri);
+        logoUrl = await ref.getDownloadURL();
+      }
+
+      await teamsCollection().add(
+        newTeamPayload(
+          { name: teamName, shortName, town, county, logoUrl },
+          auth().currentUser?.uid ?? null
+        )
+      );
+
+      Alert.alert('Success', 'Team created successfully.');
+      resetForm();
+      setAddTeamVisible(false);
+    } catch (error) {
+      console.error('Save team error:', error);
+      Alert.alert('Error', 'Could not save the team. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -44,6 +136,96 @@ export default function MoreScreen() {
         },
       ]
     );
+  };
+
+  const handleDeleteTeam = (team: Team) => {
+    Alert.alert('Delete Team', `Delete "${team.name}"? This can't be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await teamsCollection().doc(team.id).delete();
+            if (team.logoUrl) storage().refFromURL(team.logoUrl).delete().catch(() => {});
+            if (editingTeamId === team.id) setEditingTeamId(null);
+          } catch (error) {
+            console.error('Delete team error:', error);
+            Alert.alert('Error', 'Could not delete the team.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleUpdateTeam = async () => {
+    if (!editForm.name.trim()) {
+      Alert.alert('Missing info', 'Team name cannot be empty.');
+      return;
+    }
+    if (!editingTeamId) return;
+
+    setSavingEdit(true);
+    try {
+      const oldLogoUrl = teams.find((t) => t.id === editingTeamId)?.logoUrl ?? null;
+
+      let newLogoUrl: string | undefined; // undefined → keep existing logo
+      if (editLogoUri) {
+        const uid = auth().currentUser?.uid ?? 'anon';
+        const ref = storage().ref(`teamLogos/${uid}_${Date.now()}.jpg`);
+        await ref.putFile(editLogoUri);
+        newLogoUrl = await ref.getDownloadURL();
+      }
+
+      await teamsCollection().doc(editingTeamId).update(
+        updateTeamPayload({
+          name: editForm.name,
+          shortName: editForm.shortName,
+          town: editForm.town,
+          county: editForm.county,
+          ...(newLogoUrl !== undefined && { logoUrl: newLogoUrl }),
+        })
+      );
+
+      if (newLogoUrl && oldLogoUrl && oldLogoUrl !== newLogoUrl) {
+        console.log('Attempting to delete old logo:', oldLogoUrl);
+        storage().refFromURL(oldLogoUrl)
+        .delete()
+        .then(() => console.log('Old logo deleted ✅'))
+        .catch((e) => console.log('Old logo delete failed ❌', e.code, e.message));
+      }
+
+      setEditingTeamId(null);
+      setEditLogoUri(null);
+    } catch (error) {
+      console.error('Update team error:', error);
+      Alert.alert('Error', 'Could not update the team. Please try again.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const startEdit = (team: Team) => {
+    setEditingTeamId(team.id);
+    setEditForm({
+      name: team.name ?? '',
+      shortName: team.shortName ?? '',
+      town: team.town ?? '',
+      county: team.county ?? '',
+    });
+    setEditLogoUri(null);
+  };
+
+  const pickEditLogo = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow photo access to change the logo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
+    });
+    if (!result.canceled) setEditLogoUri(result.assets[0].uri);
   };
 
   return (
@@ -165,70 +347,81 @@ export default function MoreScreen() {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollForm}>
-            <TouchableOpacity style={[styles.uploadBox, { borderColor: colors.border }]}>
-              <Ionicons name="arrow-up-outline" size={24} color={colors.textMuted} />
-              <Text style={[styles.uploadText, { color: colors.textMuted }]}>Upload Logo</Text>
+            {/* Logo upload with preview */}
+            <TouchableOpacity style={[styles.uploadBox, { borderColor: colors.border }]} onPress={pickLogo} activeOpacity={0.7}>
+              {logoUri ? (
+                <Image source={{ uri: logoUri }} style={styles.logoPreview} />
+              ) : (
+                <>
+                  <Ionicons name="arrow-up-outline" size={24} color={colors.textMuted} />
+                  <Text style={[styles.uploadText, { color: colors.textMuted }]}>Upload Logo</Text>
+                </>
+              )}
             </TouchableOpacity>
+            {logoUri && (
+              <TouchableOpacity onPress={pickLogo}>
+                <Text style={[styles.changeLogoText, { color: '#3b82f6' }]}>Change logo</Text>
+              </TouchableOpacity>
+            )}
 
             <Text style={[styles.fieldLabel, { color: colors.text }]}>Team Name</Text>
-            <TextInput 
-              style={[styles.modalInput, styles.activeInputBorder, { backgroundColor: colors.inputBg, borderColor: '#3b82f6', color: colors.text }]} 
-              placeholder="Enter team name" 
-              placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} 
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+              placeholder="Enter team name"
+              placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+              value={teamName}
+              onChangeText={setTeamName}
             />
 
             <Text style={[styles.fieldLabel, { color: colors.text }]}>Short Name (Optional)</Text>
-            <TextInput 
-              style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-              placeholder="e.g., ABC" 
-              placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} 
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+              placeholder="e.g., ABC"
+              placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+              value={shortName}
+              onChangeText={setShortName}
+              autoCapitalize="characters"
             />
-
-            <View style={styles.gridRow}>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Level</Text>
-                <TouchableOpacity style={[styles.modalDropdown, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <Text style={[styles.dropdownText, { color: colors.textMuted }]}>Select level</Text>
-                  <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                </TouchableOpacity>
-              </View>
-
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Type</Text>
-                <TouchableOpacity style={[styles.modalDropdown, styles.disabledDropdown, { backgroundColor: theme === 'dark' ? '#161618' : '#e5e5ea', borderColor: colors.border }]}>
-                  <Text style={[styles.disabledDropdownText, { color: theme === 'dark' ? '#444' : '#8e8e93' }]}>N/A</Text>
-                  <Ionicons name="chevron-down" size={14} color={theme === 'dark' ? '#444' : '#8e8e93'} />
-                </TouchableOpacity>
-              </View>
-            </View>
 
             <View style={styles.gridRow}>
               <View style={{ width: '48%' }}>
                 <Text style={[styles.fieldLabel, { color: colors.text }]}>Town/City</Text>
-                <TextInput 
-                  style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-                  placeholder="Enter town or city" 
-                  placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} 
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                  placeholder="Enter town or city"
+                  placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                  value={town}
+                  onChangeText={setTown}
                 />
               </View>
 
               <View style={{ width: '48%' }}>
                 <Text style={[styles.fieldLabel, { color: colors.text }]}>County</Text>
-                <TextInput 
-                  style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-                  placeholder="Enter county" 
-                  placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} 
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                  placeholder="Enter county"
+                  placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                  value={county}
+                  onChangeText={setCounty}
                 />
               </View>
             </View>
           </ScrollView>
 
           <View style={styles.footerButtons}>
-            <TouchableOpacity style={[styles.cancelBtn, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => setAddTeamVisible(false)}>
+            <TouchableOpacity
+              style={[styles.cancelBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => setAddTeamVisible(false)}
+              disabled={saving}
+            >
               <Text style={[styles.btnText, { color: colors.text }]}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn}>
-              <Text style={styles.btnText}>Save Team</Text>
+            <TouchableOpacity
+              style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+              onPress={handleSaveTeam}
+              disabled={saving}
+            >
+              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Save Team</Text>}
             </TouchableOpacity>
           </View>
         </View>
@@ -248,76 +441,120 @@ export default function MoreScreen() {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} style={{ marginTop: 10 }}>
-            {teams.map((team) => (
-              <View key={team.id} style={[styles.editTeamCard, { backgroundColor: colors.innerCard, borderColor: colors.border }]}>
-                {editingTeamId === team.id ? (
-                  /* --- EDIT FORM STATE --- */
-                  <View style={[styles.editFormActive, { backgroundColor: theme === 'dark' ? '#000000' : '#ffffff' }]}>
-                    <View style={styles.editFormTopRow}>
-                      <View style={[styles.logoPlaceholderSmall, { borderColor: '#3b82f6', backgroundColor: colors.inputBg }]}>
-                        <Ionicons name="image-outline" size={24} color={colors.textMuted} />
+            {loadingTeams ? (
+              <ActivityIndicator color="#3b82f6" style={{ marginTop: 40 }} />
+            ) : teams.length === 0 ? (
+              <Text style={[styles.modalSub, { color: colors.textMuted, textAlign: 'center', marginTop: 40 }]}>
+                No teams yet. Add a team to see it here.
+              </Text>
+            ) : (
+              teams.map((team) => (
+                <View key={team.id} style={[styles.editTeamCard, { backgroundColor: colors.innerCard, borderColor: colors.border }]}>
+                  {editingTeamId === team.id ? (
+                    /* --- EDIT FORM STATE --- */
+                    <View style={[styles.editFormActive, { backgroundColor: theme === 'dark' ? '#000000' : '#ffffff' }]}>
+                      <View style={styles.editFormTopRow}>
+                        <TouchableOpacity
+                          style={[styles.logoPlaceholderSmall, { borderColor: '#3b82f6', backgroundColor: colors.inputBg, overflow: 'hidden' }]}
+                          onPress={pickEditLogo}
+                        >
+                          {editLogoUri ? (
+                            <Image source={{ uri: editLogoUri }} style={{ width: '100%', height: '100%' }} />
+                          ) : team.logoUrl ? (
+                            <Image source={{ uri: team.logoUrl }} style={{ width: '100%', height: '100%' }} />
+                          ) : (
+                            <Ionicons name="image-outline" size={24} color={colors.textMuted} />
+                          )}
+                        </TouchableOpacity>
+                        <TextInput
+                          style={[styles.editNameInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                          value={editForm.name}
+                          onChangeText={(t) => setEditForm((f) => ({ ...f, name: t }))}
+                          placeholder="Team Name"
+                          placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                        />
                       </View>
-                      <TextInput 
-                        style={[styles.editNameInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-                        defaultValue={team.name}
-                        placeholder="Team Name"
+
+                      <TextInput
+                        style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                        value={editForm.shortName}
+                        onChangeText={(t) => setEditForm((f) => ({ ...f, shortName: t }))}
+                        placeholder="Short Name (optional)"
                         placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                        autoCapitalize="characters"
                       />
-                    </View>
 
-                    <TouchableOpacity style={[styles.modalDropdown, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                      <Text style={{ color: colors.text }}>{team.country}</Text>
-                      <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                    </TouchableOpacity>
-
-                    <View style={styles.gridRow}>
-                      <TextInput 
-                        style={[styles.modalInput, { width: '48%', backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-                        defaultValue={team.town} 
-                      />
-                      <TextInput 
-                        style={[styles.modalInput, { width: '48%', backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} 
-                        defaultValue={team.region} 
-                      />
-                    </View>
-
-                    <View style={styles.editActionButtons}>
-                      <TouchableOpacity style={[styles.smallCancelBtn, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => setEditingTeamId(null)}>
-                        <Ionicons name="close-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
-                        <Text style={[styles.smallBtnText, { color: colors.text }]}>Cancel</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.smallSaveBtn} onPress={() => setEditingTeamId(null)}>
-                        <Ionicons name="save-outline" size={16} color="#fff" style={{ marginRight: 4 }} />
-                        <Text style={styles.smallBtnText}>Save</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : (
-                  /* --- LIST VIEW STATE --- */
-                  <View style={styles.teamListRow}>
-                    <View style={styles.teamInfoSide}>
-                      <View style={[styles.logoCircleSmall, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}>
-                        <Ionicons name="trophy" size={20} color="#facc15" />
+                      <View style={styles.gridRow}>
+                        <TextInput
+                          style={[styles.modalInput, { width: '48%', backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                          value={editForm.town}
+                          onChangeText={(t) => setEditForm((f) => ({ ...f, town: t }))}
+                          placeholder="Town/City"
+                          placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                        />
+                        <TextInput
+                          style={[styles.modalInput, { width: '48%', backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                          value={editForm.county}
+                          onChangeText={(t) => setEditForm((f) => ({ ...f, county: t }))}
+                          placeholder="County"
+                          placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                        />
                       </View>
-                      <View style={{ marginLeft: 12 }}>
-                        <Text style={[styles.teamNameTitle, { color: colors.text }]}>{team.name}</Text>
-                        <Text style={[styles.teamLocationSub, { color: colors.textMuted }]}>
-                          {team.country} · {team.town}, {team.region}
-                        </Text>
+
+                      <View style={styles.editActionButtons}>
+                        <TouchableOpacity
+                          style={[styles.smallCancelBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+                          onPress={() => { setEditingTeamId(null); setEditLogoUri(null); }}
+                          disabled={savingEdit}
+                        >
+                          <Ionicons name="close-outline" size={16} color={colors.text} style={{ marginRight: 4 }} />
+                          <Text style={[styles.smallBtnText, { color: colors.text }]}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.smallSaveBtn, savingEdit && { opacity: 0.6 }]}
+                          onPress={handleUpdateTeam}
+                          disabled={savingEdit}
+                        >
+                          {savingEdit ? (
+                            <ActivityIndicator color="#fff" size="small" />
+                          ) : (
+                            <>
+                              <Ionicons name="save-outline" size={16} color="#fff" style={{ marginRight: 4 }} />
+                              <Text style={styles.smallBtnText}>Save</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
                       </View>
                     </View>
-                    <View style={styles.teamActionSide}>
-                      <TouchableOpacity onPress={() => setEditingTeamId(team.id)}>
-                        <Ionicons name="create-outline" size={22} color={colors.text} style={{ marginRight: 15 }} />
-                      </TouchableOpacity>
-                      <TouchableOpacity>
-                        <Ionicons name="trash-outline" size={22} color="#ef4444" />
-                      </TouchableOpacity>
+                  ) : (
+                    /* --- LIST VIEW STATE --- */
+                    <View style={styles.teamListRow}>
+                      <View style={styles.teamInfoSide}>
+                        <View style={[styles.logoCircleSmall, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, overflow: 'hidden' }]}>
+                          {team.logoUrl ? (
+                            <Image source={{ uri: team.logoUrl }} style={{ width: '100%', height: '100%' }} />
+                          ) : (
+                            <Ionicons name="trophy" size={20} color="#facc15" />
+                          )}
+                        </View>
+                        <View style={{ marginLeft: 12, flex: 1 }}>
+                          <Text numberOfLines={1} style={[styles.teamNameTitle, { color: colors.text }]}>{teamDisplayName(team)}</Text>
+                          <Text numberOfLines={1} style={[styles.teamLocationSub, { color: colors.textMuted }]}>{teamLocation(team)}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.teamActionSide}>
+                        <TouchableOpacity onPress={() => startEdit(team)}>
+                          <Ionicons name="create-outline" size={22} color={colors.text} style={{ marginRight: 15 }} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => handleDeleteTeam(team)}>
+                          <Ionicons name="trash-outline" size={22} color="#ef4444" />
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </View>
-                )}
-              </View>
-            ))}
+                  )}
+                </View>
+              ))
+            )}
           </ScrollView>
 
           <View style={styles.footerDone}>
@@ -507,13 +744,16 @@ const styles = StyleSheet.create({
   disabledDropdownText: { fontSize: 14 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
 
+  logoPreview: { width: '100%', height: '100%', borderRadius: 8, resizeMode: 'cover' },
+  changeLogoText: { fontSize: 13, fontWeight: '600', marginTop: 6, marginBottom: 4, textAlign: 'center' },
+
   editTeamCard: { borderRadius: 12, marginBottom: 12, borderWidth: 1, overflow: 'hidden' },
   teamListRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
-  teamInfoSide: { flexDirection: 'row', alignItems: 'center' },
+  teamInfoSide: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
+  teamActionSide: { flexDirection: 'row', alignItems: 'center', flexShrink: 0 },
   logoCircleSmall: { width: 45, height: 45, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
   teamNameTitle: { fontSize: 16, fontWeight: 'bold' },
   teamLocationSub: { fontSize: 12, marginTop: 2 },
-  teamActionSide: { flexDirection: 'row', alignItems: 'center' },
   editFormActive: { padding: 16 },
   editFormTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   logoPlaceholderSmall: { width: 50, height: 50, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center', marginRight: 12 },

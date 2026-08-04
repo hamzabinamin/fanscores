@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppTheme } from '../context/ThemeContext';
+import { Team, teamFromDoc, teamsCollection } from '../models/Team';
 
 const COUNTRIES = [
   'Hong Kong', 'South Africa', 'United Kingdom', 'United States',
@@ -16,6 +17,19 @@ export default function GlobalHeader() {
   
   const [country, setCountry] = useState('Australia');
   const [dropdownVisible, setDropdownVisible] = useState(false);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null); 
+  const [teamsDropdownVisible, setTeamsDropdownVisible] = useState(false);
+
+  useEffect(() => {
+    // All teams, not just the current user's
+    const unsub = teamsCollection()
+      .onSnapshot(
+        (snap) => setTeams(snap.docs.map(teamFromDoc).sort((a, b) => a.name.localeCompare(b.name))),
+        (err) => console.error('Header teams fetch error:', err)
+      );
+    return () => unsub();
+  }, []);
 
   return (
     // 🌟 Bind style arrays to dynamically switch background & border accents
@@ -32,9 +46,11 @@ export default function GlobalHeader() {
         </TouchableOpacity>
 
         {/* Center: All Teams */}
-        <TouchableOpacity style={styles.row}>
+        <TouchableOpacity style={styles.row} onPress={() => setTeamsDropdownVisible(true)}>
           <Ionicons name="people-outline" size={18} color={colors.text} style={{ marginRight: 6 }} />
-          <Text style={[styles.headerText, { color: colors.text }]}>All Teams</Text>
+          <Text style={[styles.headerText, { color: colors.text }]} numberOfLines={1}>
+            {selectedTeam ? selectedTeam.name : 'All Teams'}
+          </Text>
           <Ionicons name="chevron-down" size={14} color={colors.textMuted} style={{ marginLeft: 4 }} />
         </TouchableOpacity>
 
@@ -69,6 +85,37 @@ export default function GlobalHeader() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Teams Dropdown overlay */}
+      <Modal visible={teamsDropdownVisible} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setTeamsDropdownVisible(false)}>
+          <View style={[styles.teamsDropdownCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <FlatList
+              data={[null, ...teams]}   // null = the "All Teams" reset row
+              keyExtractor={(item) => (item ? item.id : 'all')}
+              renderItem={({ item }) => {
+                const isSelected = item ? selectedTeam?.id === item.id : selectedTeam === null;
+                return (
+                  <TouchableOpacity
+                    style={styles.dropdownItem}
+                    onPress={() => { setSelectedTeam(item); setTeamsDropdownVisible(false); }}
+                  >
+                    <Text style={[styles.dropdownItemText, { color: colors.text }]}>
+                      {item ? item.name : 'All Teams'}
+                    </Text>
+                    {isSelected && <Ionicons name="checkmark" size={16} color="#3b82f6" />}
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <Text style={[styles.dropdownItemText, { color: colors.textMuted, padding: 16 }]}>
+                  No teams yet
+                </Text>
+              }
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -82,5 +129,6 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   dropdownCard: { position: 'absolute', top: 90, left: 16, width: 200, borderRadius: 8, paddingVertical: 8, borderWidth: 1, maxHeight: 400 },
   dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 16, alignItems: 'center' },
-  dropdownItemText: { fontSize: 14 }
+  dropdownItemText: { fontSize: 14 },
+  teamsDropdownCard: { position: 'absolute', top: 90, alignSelf: 'center', width: 220, borderRadius: 8, paddingVertical: 8, borderWidth: 1, maxHeight: 400 }
 });
