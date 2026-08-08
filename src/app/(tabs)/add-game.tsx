@@ -45,6 +45,8 @@ export default function AddGameScreen() {
   }, []);
 
   const teamOptions = teams.map((t) => t.name);
+  const homeTeamDoc = teams.find((t) => t.name === homeTeam);
+  const awayTeamDoc = teams.find((t) => t.name === awayTeam);
 
   const resetForm = () => {
     setHomeCountry(''); setHomeTeam(''); setHomeLevel(''); setHomeType('');
@@ -72,8 +74,8 @@ export default function AddGameScreen() {
     if (!location.trim()) {
       Alert.alert('Missing info', 'Please enter a location.'); return;
     }
-    if (homeCountry === awayCountry && homeTeam.trim().toLowerCase() === awayTeam.trim().toLowerCase()) {
-      Alert.alert('Invalid fixture', 'Home and away teams cannot be identical.'); return;
+    if (homeTeamDoc && awayTeamDoc && homeTeamDoc.id === awayTeamDoc.id) {
+      Alert.alert('Invalid fixture', 'Home and away teams cannot be the same.'); return;
     }
 
     // combine date + time into one kickoff timestamp
@@ -83,13 +85,19 @@ export default function AddGameScreen() {
     setSubmitting(true);
     try {
       await firestore().collection('Game').add({
-        homeTeam: { country: homeCountry, name: homeTeam.trim(), level: homeLevel, type: homeType },
-        awayTeam: { country: awayCountry, name: awayTeam.trim(), level: awayLevel, type: awayType },
+        homeTeam: { id: homeTeamDoc?.id ?? null, country: homeCountry, name: homeTeam.trim(), level: homeLevel, type: homeType },
+        awayTeam: { id: awayTeamDoc?.id ?? null, country: awayCountry, name: awayTeam.trim(), level: awayLevel, type: awayType },
         kickoff: firestore.Timestamp.fromDate(kickoff),
         location: location.trim(),
         sport,
         gender,
         isAssociated,
+        homeScore: 0,
+        awayScore: 0,
+        cricket: sport === 'Cricket'
+        ? { battingSide: null, runs: 0, wickets: 0, overs: 0, balls: 0 }
+        : null,
+        status: 'Upcoming',
         createdBy: auth().currentUser?.uid ?? null,
         createdAt: firestore.FieldValue.serverTimestamp(),
       });

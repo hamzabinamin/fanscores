@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAppFilter } from '../context/AppFilterContext';
 import { useAppTheme } from '../context/ThemeContext';
-import { Team, teamFromDoc, teamsCollection } from '../models/Team';
 
 const COUNTRIES = [
   'Hong Kong', 'South Africa', 'United Kingdom', 'United States',
@@ -13,23 +13,10 @@ const COUNTRIES = [
 
 export default function GlobalHeader() {
   // 🌟 Grab your global values directly
-  const { theme, colors, toggleTheme } = useAppTheme();
-  
-  const [country, setCountry] = useState('Australia');
+  const { theme, colors, toggleTheme } = useAppTheme(); 
   const [dropdownVisible, setDropdownVisible] = useState(false);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null); 
+  const { teams, selectedTeam, setSelectedTeam, country, setCountry } = useAppFilter();
   const [teamsDropdownVisible, setTeamsDropdownVisible] = useState(false);
-
-  useEffect(() => {
-    // All teams, not just the current user's
-    const unsub = teamsCollection()
-      .onSnapshot(
-        (snap) => setTeams(snap.docs.map(teamFromDoc).sort((a, b) => a.name.localeCompare(b.name))),
-        (err) => console.error('Header teams fetch error:', err)
-      );
-    return () => unsub();
-  }, []);
 
   return (
     // 🌟 Bind style arrays to dynamically switch background & border accents

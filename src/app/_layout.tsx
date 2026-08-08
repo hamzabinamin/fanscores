@@ -1,7 +1,8 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AppFilterProvider } from '../context/AppFilterContext';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { ThemeProvider, useAppTheme } from '../context/ThemeContext';
 
@@ -42,7 +43,9 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <ThemeProvider>
-          <RootStack />
+          <AppFilterProvider>
+            <RootStack />
+          </AppFilterProvider>
         </ThemeProvider>
       </AuthProvider>
     </SafeAreaProvider>
