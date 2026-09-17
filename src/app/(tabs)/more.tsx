@@ -1,12 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
 import storage from '@react-native-firebase/storage';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Linking, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import DateTimeField from '../../components/DateTimeField';
 import GlobalHeader from '../../components/GlobalHeader';
+import SelectField from '../../components/SelectField';
+import { COUNTRIES, GENDERS, SPORTS } from '../../constants/gameOptions';
 import { useAppTheme } from '../../context/ThemeContext';
+import {
+  CricketState, emptyCricketState, finalizeCricketGame, finalizeGame,
+  Game, gameFromDoc, gamesCollection,
+} from '../../models/Game';
+import { registerForPush, setNotificationsEnabled } from '../../models/notifications';
 import {
   newTeamPayload,
   Team,
@@ -16,12 +25,15 @@ import {
   teamsCollection,
   updateTeamPayload,
 } from '../../models/Team';
+import { deactivateAccount } from '../../models/User';
 
 export default function MoreScreen() {
   const router = useRouter();
   const [notifications, setNotifications] = useState(false);
-  const { colors, theme } = useAppTheme(); // 🌟 Grab colors and theme state
-  
+  const { colors, theme } = useAppTheme();
+
+  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
+
   // Modal toggle views state
   const [addTeamVisible, setAddTeamVisible] = useState(false);
   const [editTeamsVisible, setEditTeamsVisible] = useState(false);
@@ -35,12 +47,48 @@ export default function MoreScreen() {
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const [teams, setTeams] = useState<Team[]>([]); 
+  const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(true);
   const [editForm, setEditForm] = useState({ name: '', shortName: '', town: '', county: '' });
-  const [editLogoUri, setEditLogoUri] = useState<string | null>(null); // newly picked local image
+  const [editLogoUri, setEditLogoUri] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Add Result: games + filters
+  const [allGames, setAllGames] = useState<Game[]>([]);
+  const [fCountry, setFCountry] = useState('');
+  const [fSport, setFSport] = useState('');
+  const [fGender, setFGender] = useState('');
+  const [fLocation, setFLocation] = useState('');
+  const [fDate, setFDate] = useState<Date | null>(null);
+
+  const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+
+  // result entry (regular)
+  const [resHome, setResHome] = useState('0');
+  const [resAway, setResAway] = useState('0');
+  const [resWinner, setResWinner] = useState('');
+
+  // result entry (cricket)
+  const [resCricket, setResCricket] = useState<CricketState>(emptyCricketState());
+
+  const [savingResult, setSavingResult] = useState(false);
+
+  useEffect(() => {
+    setPhoneNumber(auth().currentUser?.phoneNumber ?? null);
+  }, []);
+
+  // ---- notification preference (load saved value) ----
+  useEffect(() => {
+    const uid = auth().currentUser?.uid;
+    if (!uid) return;
+    const unsub = firestore().collection('Users').doc(uid).onSnapshot(
+      (doc) => setNotifications(doc.data()?.notificationsEnabled === true),
+      (err) => console.error('Notif pref fetch error:', err)
+    );
+    return () => unsub();
+  }, []);
+
+  // ---- teams subscription ----
   useEffect(() => {
     const uid = auth().currentUser?.uid;
     if (!uid) { setLoadingTeams(false); return; }
@@ -56,6 +104,51 @@ export default function MoreScreen() {
       );
     return () => unsub();
   }, []);
+
+  // ---- games subscription (only while the result modal is open) ----
+  useEffect(() => {
+    if (!addResultVisible) return;
+    const unsub = gamesCollection().onSnapshot(
+      (snap) => setAllGames(snap.docs.map(gameFromDoc)),
+      (err) => console.error('Result games fetch error:', err)
+    );
+    return () => unsub();
+  }, [addResultVisible]);
+
+  const filteredGames = allGames.filter((g) => {
+    if (fCountry && g.homeTeam.country !== fCountry && g.awayTeam.country !== fCountry) return false;
+    if (fSport && g.sport !== fSport) return false;
+    if (fGender && g.gender !== fGender) return false;
+    if (fLocation.trim() && !g.location.toLowerCase().includes(fLocation.trim().toLowerCase())) return false;
+    if (fDate) {
+      const k = g.kickoff?.toDate();
+      if (!k || k.toDateString() !== fDate.toDateString()) return false;
+    }
+    return true;
+  });
+
+  // ---- notifications toggle ----
+  const onToggleNotifications = async (value: boolean) => {
+    setNotifications(value); // optimistic
+    try {
+      if (value) {
+        const token = await registerForPush();
+        if (!token) {
+          setNotifications(false);
+          Alert.alert(
+            'Notifications',
+            'Enable notifications in your device settings to receive match updates.'
+          );
+        }
+      } else {
+        await setNotificationsEnabled(false);
+      }
+    } catch (error) {
+      console.error('Toggle notifications error:', error);
+      setNotifications(false);
+      Alert.alert('Error', 'Could not update your notification setting.');
+    }
+  };
 
   const pickLogo = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -78,6 +171,21 @@ export default function MoreScreen() {
     setTeamName(''); setShortName(''); setTown(''); setCounty(''); setLogoUri(null);
   };
 
+  const openEmail = async (subject: string) => {
+    const to = 'support@fanscores.com';   
+    const url = `mailto:${to}?subject=${encodeURIComponent(subject)}`;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (!canOpen) {
+        Alert.alert('No email app', `Please email us at ${to}`);
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Error', `Could not open your email app. Reach us at ${to}`);
+    }
+  };
+
   const handleSaveTeam = async () => {
     if (!teamName.trim()) {
       Alert.alert('Missing info', 'Please enter a team name.');
@@ -88,7 +196,6 @@ export default function MoreScreen() {
     try {
       let logoUrl: string | null = null;
 
-      // Upload the logo to Firebase Storage (if one was chosen)
       if (logoUri) {
         const uid = auth().currentUser?.uid ?? 'anon';
         const path = `teamLogos/${uid}_${Date.now()}.jpg`;
@@ -127,11 +234,45 @@ export default function MoreScreen() {
           onPress: async () => {
             try {
               await auth().signOut();
-              // No router call — RootStack's useEffect redirects to login automatically.
             } catch (error) {
               console.error('Logout error:', error);
               Alert.alert('Error', 'Could not log out. Please try again.');
             }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeactivate = () => {
+    Alert.alert(
+      'Deactivate Account',
+      'Your account will be deactivated and you will be signed out. You can reactivate by contacting support or signing back in. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Deactivate',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Are you sure?',
+              'This will deactivate your account.',
+              [
+                { text: 'No', style: 'cancel' },
+                {
+                  text: 'Yes, deactivate',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await deactivateAccount();
+                    } catch (error) {
+                      console.error('Deactivate error:', error);
+                      Alert.alert('Error', 'Could not deactivate your account. Please try again.');
+                    }
+                  },
+                },
+              ]
+            );
           },
         },
       ]
@@ -169,7 +310,7 @@ export default function MoreScreen() {
     try {
       const oldLogoUrl = teams.find((t) => t.id === editingTeamId)?.logoUrl ?? null;
 
-      let newLogoUrl: string | undefined; // undefined → keep existing logo
+      let newLogoUrl: string | undefined;
       if (editLogoUri) {
         const uid = auth().currentUser?.uid ?? 'anon';
         const ref = storage().ref(`teamLogos/${uid}_${Date.now()}.jpg`);
@@ -188,11 +329,7 @@ export default function MoreScreen() {
       );
 
       if (newLogoUrl && oldLogoUrl && oldLogoUrl !== newLogoUrl) {
-        console.log('Attempting to delete old logo:', oldLogoUrl);
-        storage().refFromURL(oldLogoUrl)
-        .delete()
-        .then(() => console.log('Old logo deleted ✅'))
-        .catch((e) => console.log('Old logo delete failed ❌', e.code, e.message));
+        storage().refFromURL(oldLogoUrl).delete().catch(() => {});
       }
 
       setEditingTeamId(null);
@@ -228,16 +365,86 @@ export default function MoreScreen() {
     if (!result.canceled) setEditLogoUri(result.assets[0].uri);
   };
 
+  // ---- Add Result handlers ----
+  const openResultFor = (game: Game) => {
+    setSelectedGame(game);
+    setResWinner(game.winner ?? '');
+    if (game.sport === 'Cricket') {
+      setResCricket(game.cricket ?? emptyCricketState());
+    } else {
+      setResHome(String(game.homeScore ?? 0));
+      setResAway(String(game.awayScore ?? 0));
+    }
+  };
+
+  const setInnings = (sideKey: 'home' | 'away', field: 'runs' | 'wickets' | 'overs' | 'balls', val: string) => {
+    const n = parseInt(val, 10) || 0;
+    setResCricket((c) => ({ ...c, [sideKey]: { ...c[sideKey], [field]: n } }));
+  };
+
+  const clearFilters = () => {
+    setFCountry(''); setFSport(''); setFGender(''); setFLocation(''); setFDate(null);
+  };
+
+  const closeResultModal = () => {
+    setSelectedGame(null);
+    setAddResultVisible(false);
+  };
+
+  const saveRegularResult = async () => {
+    if (!selectedGame) return;
+    if (!resWinner) {
+      Alert.alert('Select winner', 'Please choose the result before saving.');
+      return;
+    }
+    const h = parseInt(resHome, 10) || 0;
+    const a = parseInt(resAway, 10) || 0;
+    setSavingResult(true);
+    try {
+      await finalizeGame(selectedGame.id, h, a, resWinner);
+      Alert.alert('Saved', 'Result recorded.');
+      setSelectedGame(null);
+      setAddResultVisible(false);
+    } catch {
+      Alert.alert('Error', 'Could not save the result.');
+    } finally {
+      setSavingResult(false);
+    }
+  };
+
+  const saveCricketResult = async () => {
+    if (!selectedGame) return;
+    if (!resWinner) {
+      Alert.alert('Select winner', 'Please choose the result before saving.');
+      return;
+    }
+    setSavingResult(true);
+    try {
+      await finalizeCricketGame(selectedGame.id, resCricket, resWinner);
+      Alert.alert('Saved', 'Result recorded.');
+      setSelectedGame(null);
+      setAddResultVisible(false);
+    } catch {
+      Alert.alert('Error', 'Could not save the result.');
+    } finally {
+      setSavingResult(false);
+    }
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <GlobalHeader />
       <ScrollView style={{ flex: 1 }}>
-        
+
         {/* User Card */}
         <View style={[styles.userCard, { backgroundColor: colors.card }]}>
-          <View style={styles.avatar}><Text style={styles.avatarText}>G</Text></View>
-          <View>
-            <Text style={[styles.userName, { color: colors.text }]}>Guest User</Text>
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={24} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
+              {phoneNumber ?? 'Guest User'}
+            </Text>
             <Text style={[styles.userSub, { color: colors.textMuted }]}>Welcome back</Text>
           </View>
         </View>
@@ -248,22 +455,19 @@ export default function MoreScreen() {
             <Ionicons name="notifications-outline" size={20} color={colors.text} />
             <Text style={[styles.rowText, { color: colors.text }]}>Notifications</Text>
           </View>
-          <Switch 
-            value={notifications} 
-            onValueChange={setNotifications} 
-            // 🌟 Keeps the track highly legible across both backgrounds
-            trackColor={{ 
-              false: theme === 'dark' ? '#3e3e3f' : '#d1d1d6', 
-              true: '#3b82f6' 
-            }} 
-            // 🌟 Switches knob to a distinct dark gray when off in light mode so it stands out
+          <Switch
+            value={notifications}
+            onValueChange={onToggleNotifications}
+            trackColor={{
+              false: theme === 'dark' ? '#3e3e3f' : '#d1d1d6',
+              true: '#3b82f6'
+            }}
             thumbColor={
-              notifications 
-                ? '#ffffff' 
+              notifications
+                ? '#ffffff'
                 : (theme === 'dark' ? '#8e8e93' : '#ffffff')
             }
-            // 🌟 Fixes the track background for iOS frame execution explicitly
-            ios_backgroundColor={theme === 'dark' ? '#3e3e3f' : '#d1d1d6'}                     
+            ios_backgroundColor={theme === 'dark' ? '#3e3e3f' : '#d1d1d6'}
           />
         </View>
 
@@ -300,7 +504,7 @@ export default function MoreScreen() {
           <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.rowItem, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity style={[styles.rowItem, { borderBottomColor: colors.border }]} onPress={handleDeactivate}>
           <View style={styles.leftRow}>
             <Ionicons name="person-remove-outline" size={20} color="#ef4444" />
             <Text style={[styles.rowText, styles.redText]}>Deactivate Account</Text>
@@ -308,7 +512,10 @@ export default function MoreScreen() {
           <Ionicons name="chevron-forward" size={16} color="#ef4444" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.rowItem, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity
+          style={[styles.rowItem, { borderBottomColor: colors.border }]}
+          onPress={() => openEmail('FanScores — Contact Us')}
+        >
           <View style={styles.leftRow}>
             <Ionicons name="mail-outline" size={20} color={colors.text} />
             <Text style={[styles.rowText, { color: colors.text }]}>Contact Us</Text>
@@ -316,7 +523,10 @@ export default function MoreScreen() {
           <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.rowItem, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity
+          style={[styles.rowItem, { borderBottomColor: colors.border }]}
+          onPress={() => openEmail('FanScores — Recommend Changes')}
+        >
           <View style={styles.leftRow}>
             <Ionicons name="chatbox-outline" size={20} color={colors.text} />
             <Text style={[styles.rowText, { color: colors.text }]}>Recommend Changes</Text>
@@ -347,7 +557,6 @@ export default function MoreScreen() {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollForm}>
-            {/* Logo upload with preview */}
             <TouchableOpacity style={[styles.uploadBox, { borderColor: colors.border }]} onPress={pickLogo} activeOpacity={0.7}>
               {logoUri ? (
                 <Image source={{ uri: logoUri }} style={styles.logoPreview} />
@@ -451,7 +660,6 @@ export default function MoreScreen() {
               teams.map((team) => (
                 <View key={team.id} style={[styles.editTeamCard, { backgroundColor: colors.innerCard, borderColor: colors.border }]}>
                   {editingTeamId === team.id ? (
-                    /* --- EDIT FORM STATE --- */
                     <View style={[styles.editFormActive, { backgroundColor: theme === 'dark' ? '#000000' : '#ffffff' }]}>
                       <View style={styles.editFormTopRow}>
                         <TouchableOpacity
@@ -527,7 +735,6 @@ export default function MoreScreen() {
                       </View>
                     </View>
                   ) : (
-                    /* --- LIST VIEW STATE --- */
                     <View style={styles.teamListRow}>
                       <View style={styles.teamInfoSide}>
                         <View style={[styles.logoCircleSmall, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, overflow: 'hidden' }]}>
@@ -565,142 +772,193 @@ export default function MoreScreen() {
         </View>
       </Modal>
 
-     {/* MODAL 3: ADD MATCH RESULT */}
+      {/* MODAL 3: ADD MATCH RESULT */}
       <Modal visible={addResultVisible} animationType="slide" presentationStyle="pageSheet">
         <View style={[styles.modalContent, { backgroundColor: colors.background }]}>
           <View style={styles.modalHeader}>
             <View>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Add Match Result</Text>
-              <Text style={[styles.modalSub, { color: colors.textMuted }]}>Add a completed match with final score.</Text>
+              <Text style={[styles.modalSub, { color: colors.textMuted }]}>
+                {selectedGame ? 'Enter the final score and winner.' : 'Filter and pick a match to finalize.'}
+              </Text>
             </View>
-            <TouchableOpacity onPress={() => setAddResultVisible(false)} style={styles.closeButton}>
-              <Ionicons name="close" size={24} color={colors.text} />
+            <TouchableOpacity
+              onPress={() => { selectedGame ? setSelectedGame(null) : closeResultModal(); }}
+              style={styles.closeButton}
+            >
+              <Ionicons name={selectedGame ? 'arrow-back' : 'close'} size={24} color={colors.text} />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-            
-            {/* --- HOME TEAM --- */}
-            <Text style={[styles.fieldLabel, { color: colors.text }]}>Home Team</Text>
-            <TouchableOpacity style={[styles.modalDropdown, { backgroundColor: colors.inputBg, borderColor: '#3b82f6', borderWidth: 1.5 }]}>
-              <Text style={{ color: colors.text }}>Hong Kong</Text>
-              <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-            </TouchableOpacity>
-            
-            <View style={[styles.gridRow, { marginTop: 8 }]}>
-              <TouchableOpacity style={[styles.modalDropdown, { width: '31%', paddingVertical: 12, backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                <Text style={[styles.dropdownText, { color: colors.textMuted }]}>Team</Text>
-                <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalDropdown, { width: '31%', paddingVertical: 12, backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                <Text style={[styles.dropdownText, { color: colors.textMuted }]}>Level</Text>
-                <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalDropdown, { width: '31%', paddingVertical: 12, backgroundColor: theme === 'dark' ? '#161618' : '#e5e5ea', borderColor: colors.border }]}>
-                <Text style={{ color: theme === 'dark' ? '#444' : '#8e8e93', fontSize: 12 }}>N/A</Text>
-                <Ionicons name="chevron-down" size={12} color={theme === 'dark' ? '#444' : '#8e8e93'} />
-              </TouchableOpacity>
-            </View>
-
-            {/* --- AWAY TEAM --- */}
-            <Text style={[styles.fieldLabel, { color: colors.text }]}>Away Team</Text>
-            <TouchableOpacity style={[styles.modalDropdown, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-              <Text style={{ color: colors.text }}>Hong Kong</Text>
-              <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-            </TouchableOpacity>
-            
-            <View style={[styles.gridRow, { marginTop: 8 }]}>
-              <TouchableOpacity style={[styles.modalDropdown, { width: '31%', paddingVertical: 12, backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                <Text style={[styles.dropdownText, { color: colors.textMuted }]}>Team</Text>
-                <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalDropdown, { width: '31%', paddingVertical: 12, backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                <Text style={[styles.dropdownText, { color: colors.textMuted }]}>Level</Text>
-                <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalDropdown, { width: '31%', paddingVertical: 12, backgroundColor: theme === 'dark' ? '#161618' : '#e5e5ea', borderColor: colors.border }]}>
-                <Text style={{ color: theme === 'dark' ? '#444' : '#8e8e93', fontSize: 12 }}>N/A</Text>
-                <Ionicons name="chevron-down" size={12} color={theme === 'dark' ? '#444' : '#8e8e93'} />
-              </TouchableOpacity>
-            </View>
-
-            {/* --- DATE & TIME --- */}
-            <View style={[styles.gridRow, { marginTop: 12 }]}>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Date</Text>
-                <View style={[styles.inputIconWrapper, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <TextInput style={[styles.iconInput, { color: colors.text }]} placeholder="dd/mm/yyyy" placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} />
-                  <Ionicons name="calendar-outline" size={16} color={colors.textMuted} style={styles.inputIcon} />
+          {!selectedGame ? (
+            /* PHASE 1: FILTER + LIST */
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+              <View style={styles.gridRow}>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>Country</Text>
+                  <SelectField placeholder="Any" title="Country" value={fCountry} options={['Any', ...COUNTRIES]}
+                    onSelect={(v) => setFCountry(v === 'Any' ? '' : v)} />
+                </View>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>Sport</Text>
+                  <SelectField placeholder="Any" title="Sport" value={fSport} options={['Any', ...SPORTS]}
+                    onSelect={(v) => setFSport(v === 'Any' ? '' : v)} />
                 </View>
               </View>
-              
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Time</Text>
-                <View style={[styles.inputIconWrapper, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <TextInput style={[styles.iconInput, { color: colors.text }]} placeholder="--:-- --" placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} />
-                  <Ionicons name="time-outline" size={16} color={colors.textMuted} style={styles.inputIcon} />
+
+              <View style={styles.gridRow}>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>Gender</Text>
+                  <SelectField placeholder="Any" title="Gender" value={fGender} options={['Any', ...GENDERS]}
+                    onSelect={(v) => setFGender(v === 'Any' ? '' : v)} />
+                </View>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>Location</Text>
+                  <TextInput
+                    style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                    placeholder="Any location" placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                    value={fLocation} onChangeText={setFLocation}
+                  />
                 </View>
               </View>
-            </View>
 
-            {/* --- LOCATION --- */}
-            <Text style={[styles.fieldLabel, { color: colors.text }]}>Location</Text>
-            <TextInput style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} placeholder="Match location" placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'} />
+              <Text style={[styles.fieldLabel, { color: colors.text }]}>Date</Text>
+              <DateTimeField mode="date" value={fDate} onChange={setFDate} placeholder="Any date" />
 
-            {/* --- SPORT & GENDER --- */}
-            <View style={[styles.gridRow, { marginTop: 12 }]}>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Sport</Text>
-                <TouchableOpacity style={[styles.modalDropdown, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <Text style={{ color: colors.text }}>Rugby</Text>
-                  <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+              {(fCountry || fSport || fGender || fLocation || fDate) && (
+                <TouchableOpacity onPress={clearFilters}>
+                  <Text style={{ color: '#3b82f6', marginTop: 12, fontWeight: '600' }}>Clear filters</Text>
                 </TouchableOpacity>
-              </View>
-              
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Gender</Text>
-                <TouchableOpacity style={[styles.modalDropdown, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <Text style={{ color: colors.text }}>Men</Text>
-                  <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                </TouchableOpacity>
-              </View>
-            </View>
+              )}
 
-            {/* --- ASSOCIATION --- */}
-            <View style={[styles.checkboxContainer, { backgroundColor: colors.innerCard }]}>
-              <Ionicons name="square-outline" size={20} color="#3b82f6" style={{ marginRight: 8 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.text, fontWeight: '600' }}>I am associated with this team</Text>
-                <Text style={{ color: colors.textMuted, fontSize: 12 }}>Check this to display verified badge on the game ticker</Text>
-              </View>
-            </View>
+              <Text style={[styles.modalTitleSection, { color: colors.text }]}>
+                Matches ({filteredGames.length})
+              </Text>
 
-            {/* --- SCORES --- */}
-            <Text style={[styles.modalTitleSection, { color: colors.text }]}>Final Score</Text>
-            <View style={styles.gridRow}>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Home Score</Text>
-                <TextInput style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} defaultValue="0" keyboardType="numeric" />
-              </View>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Away Score</Text>
-                <TextInput style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]} defaultValue="0" keyboardType="numeric" />
-              </View>
-            </View>
+              {filteredGames.length === 0 ? (
+                <Text style={[styles.modalSub, { color: colors.textMuted, textAlign: 'center', marginTop: 20 }]}>
+                  No matches fit these filters.
+                </Text>
+              ) : (
+                [...filteredGames]
+                  .sort((a, b) => (a.winner ? 1 : 0) - (b.winner ? 1 : 0))
+                  .map((g) => {
+                    const declared = !!g.winner;
+                    return (
+                      <TouchableOpacity
+                        key={g.id}
+                        style={[
+                          styles.resultGameRow,
+                          { backgroundColor: colors.innerCard, borderColor: colors.border },
+                          declared && styles.resultGameRowDone,
+                        ]}
+                        onPress={() => openResultFor(g)}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={[styles.teamNameTitle, { color: declared ? colors.textMuted : colors.text }]}
+                            numberOfLines={1}
+                          >
+                            {g.homeTeam.name} vs {g.awayTeam.name}
+                          </Text>
+                          <Text style={[styles.teamLocationSub, { color: colors.textMuted }]} numberOfLines={1}>
+                            {g.sport} · {g.gender} · {g.kickoff?.toDate().toLocaleDateString('en-GB') ?? '--'} · {g.location}
+                          </Text>
+                          {declared && (
+                            <Text style={[styles.winnerLine, { color: '#3b82f6' }]} numberOfLines={1}>
+                              Result: {g.winner}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={[styles.pill, { backgroundColor: theme === 'dark' ? '#2a2a2d' : '#e5e5ea' }]}>
+                          <Text style={{ color: colors.textMuted, fontSize: 12, fontWeight: '600' }}>
+                            {declared ? 'Declared' : 'Pending'}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
+              )}
+            </ScrollView>
+          ) : selectedGame.sport === 'Cricket' ? (
+            /* PHASE 2A: CRICKET RESULT */
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+              <Text style={[styles.modalTitleSection, { color: colors.text }]}>
+                {selectedGame.homeTeam.name} vs {selectedGame.awayTeam.name}
+              </Text>
 
-            <Text style={[styles.fieldLabel, { color: colors.text }]}>Winner</Text>
-            <View style={[styles.dummySelect, { marginBottom: 30, backgroundColor: colors.inputBg, borderColor: colors.border }]}><Text style={{ color: colors.text }}>Draw</Text></View>
-          </ScrollView>
+              {(['home', 'away'] as const).map((sideKey) => {
+                const inn = resCricket[sideKey];
+                const name = sideKey === 'home' ? selectedGame.homeTeam.name : selectedGame.awayTeam.name;
+                return (
+                  <View key={sideKey} style={{ marginBottom: 16 }}>
+                    <Text style={[styles.fieldLabel, { color: colors.text }]}>{name} innings</Text>
+                    <View style={styles.gridRow}>
+                      {(['runs', 'wickets', 'overs', 'balls'] as const).map((f) => (
+                        <View key={f} style={{ width: '23%' }}>
+                          <Text style={[styles.smallLabel, { color: colors.textMuted }]}>{f}</Text>
+                          <TextInput
+                            style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text, padding: 8, textAlign: 'center' }]}
+                            keyboardType="numeric"
+                            value={String(inn[f])}
+                            onChangeText={(v) => setInnings(sideKey, f, v)}
+                          />
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })}
 
-          {/* Fixed Footer Buttons */}
-          <View style={styles.footerButtons}>
-            <TouchableOpacity style={[styles.cancelBtn, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => setAddResultVisible(false)}>
-              <Text style={[styles.btnText, { color: colors.text }]}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn}>
-              <Text style={styles.btnText}>Save Result</Text>
-            </TouchableOpacity>
-          </View>
+              <Text style={[styles.fieldLabel, { color: colors.text }]}>Winner</Text>
+              <SelectField
+                placeholder="Select winner" title="Winner"
+                value={resWinner}
+                options={[selectedGame.homeTeam.name, selectedGame.awayTeam.name, 'Tie']}
+                onSelect={setResWinner}
+              />
+
+              <TouchableOpacity style={[styles.saveBtn, { width: '100%', marginTop: 24 }, savingResult && { opacity: 0.6 }]} onPress={saveCricketResult} disabled={savingResult}>
+                {savingResult ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Save Result</Text>}
+              </TouchableOpacity>
+            </ScrollView>
+          ) : (
+            /* PHASE 2B: REGULAR RESULT */
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+              <Text style={[styles.modalTitleSection, { color: colors.text }]}>
+                {selectedGame.homeTeam.name} vs {selectedGame.awayTeam.name}
+              </Text>
+
+              <View style={styles.gridRow}>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>{selectedGame.homeTeam.name}</Text>
+                  <TextInput
+                    style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text, textAlign: 'center' }]}
+                    keyboardType="numeric" value={resHome} onChangeText={setResHome}
+                  />
+                </View>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>{selectedGame.awayTeam.name}</Text>
+                  <TextInput
+                    style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text, textAlign: 'center' }]}
+                    keyboardType="numeric" value={resAway} onChangeText={setResAway}
+                  />
+                </View>
+              </View>
+
+              <Text style={[styles.fieldLabel, { color: colors.text }]}>Winner</Text>
+              <SelectField
+                placeholder="Select winner" title="Winner"
+                value={resWinner}
+                options={[selectedGame.homeTeam.name, selectedGame.awayTeam.name, 'Draw']}
+                onSelect={setResWinner}
+              />
+
+              <TouchableOpacity style={[styles.saveBtn, { width: '100%', marginTop: 24 }, savingResult && { opacity: 0.6 }]} onPress={saveRegularResult} disabled={savingResult}>
+                {savingResult ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Save Result</Text>}
+              </TouchableOpacity>
+            </ScrollView>
+          )}
         </View>
       </Modal>
     </View>
@@ -718,7 +976,7 @@ const styles = StyleSheet.create({
   leftRow: { flexDirection: 'row', alignItems: 'center' },
   rowText: { fontSize: 15, marginLeft: 12 },
   redText: { color: '#ef4444' },
-  
+
   modalContent: { flex: 1, padding: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
@@ -740,7 +998,7 @@ const styles = StyleSheet.create({
   activeInputBorder: { borderWidth: 1.5 },
   modalDropdown: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 14 },
   dropdownText: { fontSize: 14 },
-  disabledDropdown: { borderLeftWidth: 1, borderRightWidth: 1},
+  disabledDropdown: { borderLeftWidth: 1, borderRightWidth: 1 },
   disabledDropdownText: { fontSize: 14 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
 
@@ -768,4 +1026,11 @@ const styles = StyleSheet.create({
   inputIconWrapper: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 8 },
   iconInput: { flex: 1, padding: 14, fontSize: 14 },
   inputIcon: { paddingRight: 14 },
+
+  // Add Result
+  resultGameRow: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 10, borderWidth: 1, marginBottom: 10 },
+  resultGameRowDone: { opacity: 0.55 },
+  winnerLine: { fontSize: 12, fontWeight: '600', marginTop: 2 },
+  smallLabel: { fontSize: 11, marginBottom: 4, textTransform: 'capitalize' },
+  pill: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4 },
 });

@@ -4,7 +4,7 @@
     "slug": "FanScores",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/app-icon.png",
     "scheme": "fanscores",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -21,10 +21,8 @@
       "package": "com.fanscores.app",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/app-icon.png",
+        "backgroundColor": "#ffffff"
       },
       "predictiveBackGestureEnabled": false
     },

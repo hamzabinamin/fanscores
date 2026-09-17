@@ -1,17 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import FixtureCard from '../../components/FixtureCard';
 import GlobalHeader from '../../components/GlobalHeader';
 import { useAppFilter } from '../../context/AppFilterContext';
 import { useAppTheme } from '../../context/ThemeContext';
-import { Game, gameFromDoc, gamesCollection } from '../../models/Game';
+import { deleteGame, Game, gameFromDoc, gamesCollection } from '../../models/Game';
 
 export default function HomeScreen() {
   const { colors } = useAppTheme();
-  const { teams, selectedTeam } = useAppFilter(); // teams for logos, selectedTeam for filtering
+  const { teams, selectedTeam } = useAppFilter();
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // track open swipeables so we can close them after action
+  const swipeRefs = useRef<Record<string, Swipeable | null>>({});
 
   useEffect(() => {
     const unsub = gamesCollection().onSnapshot(
@@ -19,7 +23,7 @@ export default function HomeScreen() {
         const list = snap.docs.map(gameFromDoc).sort((a, b) => {
           const at = a.kickoff?.toMillis() ?? 0;
           const bt = b.kickoff?.toMillis() ?? 0;
-          return at - bt; // soonest first
+          return at - bt;
         });
         setGames(list);
         setLoading(false);
@@ -29,10 +33,33 @@ export default function HomeScreen() {
     return () => unsub();
   }, []);
 
-  // apply the header's team filter (by id on either side)
   const visibleGames = selectedTeam
     ? games.filter((g) => g.homeTeam.id === selectedTeam.id || g.awayTeam.id === selectedTeam.id)
     : games;
+
+  const confirmDelete = (game: Game) => {
+    swipeRefs.current[game.id]?.close(); // snap the row back
+    Alert.alert(
+      'Delete Fixture',
+      `Delete ${game.homeTeam.name} vs ${game.awayTeam.name}? This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () =>
+            deleteGame(game.id).catch(() => Alert.alert('Error', 'Could not delete the fixture.')),
+        },
+      ]
+    );
+  };
+
+  const renderRightActions = (game: Game) => (
+    <TouchableOpacity style={styles.deleteAction} onPress={() => confirmDelete(game)}>
+      <Ionicons name="trash-outline" size={24} color="#fff" />
+      <Text style={styles.deleteText}>Delete</Text>
+    </TouchableOpacity>
+  );
 
   if (loading) {
     return (
@@ -67,16 +94,26 @@ export default function HomeScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <GlobalHeader />
-      <FlatList
-        data={visibleGames}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <FixtureCard game={item} teams={teams} />}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
-    </View>
+    <GestureHandlerRootView style={styles.container}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <GlobalHeader />
+        <FlatList
+          data={visibleGames}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <Swipeable
+              ref={(r) => { swipeRefs.current[item.id] = r; }}
+              renderRightActions={() => renderRightActions(item)}
+              overshootRight={false}
+            >
+              <FixtureCard game={item} teams={teams} />
+            </Swipeable>
+          )}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
+    </GestureHandlerRootView>
   );
 }
 
@@ -89,4 +126,14 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
   hintRow: { flexDirection: 'row', alignItems: 'center' },
   hintText: { fontSize: 14 },
+  deleteAction: {
+    backgroundColor: '#ef4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 90,
+    marginBottom: 16,   // matches FixtureCard's marginBottom so it aligns
+    borderRadius: 16,
+    marginLeft: 8,
+  },
+  deleteText: { color: '#fff', fontSize: 12, fontWeight: '600', marginTop: 4 },
 });

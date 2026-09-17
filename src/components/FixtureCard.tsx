@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import auth from '@react-native-firebase/auth';
 import { useRouter } from 'expo-router';
-import { Image, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAppTheme } from '../context/ThemeContext';
 import { Game, inningsLabel, sideLabel } from '../models/Game';
+import { setGameSubscription } from '../models/notifications';
 import { Team } from '../models/Team';
 
 interface FixtureCardProps {
@@ -13,6 +15,9 @@ interface FixtureCardProps {
 export default function FixtureCard({ game, teams }: FixtureCardProps) {
   const { colors, theme } = useAppTheme();
   const router = useRouter();
+
+  const uid = auth().currentUser?.uid;
+  const subscribed = !!uid && (game.subscribers ?? []).includes(uid);
 
   const logoFor = (id: string | null) =>
     (id && teams.find((t) => t.id === id)?.logoUrl) || null;
@@ -32,6 +37,18 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
   const cricketMain = isCricket && game.cricket
     ? (game.cricket.battingSide === 'away' ? game.cricket.away : game.cricket.home)
     : null;
+
+  const toggleSubscribe = async () => {
+    if (!uid) {
+      Alert.alert('Sign in required', 'Please sign in to get notifications for this match.');
+      return;
+    }
+    try {
+      await setGameSubscription(game.id, !subscribed);
+    } catch {
+      Alert.alert('Error', 'Could not update notifications for this game.');
+    }
+  };
 
   const onShare = async () => {
     try {
@@ -127,7 +144,13 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
           <Text style={[styles.footerText, { color: colors.textMuted }]} numberOfLines={1}>{game.location}</Text>
         </View>
         <View style={{ flex: 1 }} />
-        <Ionicons name="notifications-outline" size={18} color={colors.textMuted} style={{ marginRight: 16 }} />
+        <TouchableOpacity onPress={toggleSubscribe} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginRight: 16 }}>
+          <Ionicons
+            name={subscribed ? 'notifications' : 'notifications-outline'}
+            size={18}
+            color={subscribed ? '#3b82f6' : colors.textMuted}
+          />
+        </TouchableOpacity>
         <TouchableOpacity onPress={onShare} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Ionicons name="share-social-outline" size={18} color={colors.textMuted} />
         </TouchableOpacity>

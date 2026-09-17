@@ -17,7 +17,10 @@ import {
     emptyCricketState,
     Game,
     gameFromDoc, gamesCollection,
-    inningsLabel, MATCH_STATUSES, sideLabel, updateCricketState, updateGameScore, updateGameStatus,
+    inningsLabel,
+    sideLabel,
+    statusesForSport,
+    updateCricketState, updateGameScore, updateGameStatus,
 } from '../../models/Game';
 
 export default function MatchDetailScreen() {
@@ -85,6 +88,7 @@ export default function MatchDetailScreen() {
 
   const kickoff = game.kickoff?.toDate();
   const isCricket = game.sport === 'Cricket';
+  const statuses = statusesForSport(game.sport);
   const cricket: CricketState = game.cricket ?? emptyCricketState();
   const battingSide = cricket.battingSide;
   const activeInnings: CricketInnings | null = battingSide ? cricket[battingSide] : null;
@@ -301,7 +305,7 @@ export default function MatchDetailScreen() {
             <View>
               {/* Status tabs */}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusRow}>
-                {MATCH_STATUSES.map((s) => {
+                {statuses.map((s) => {
                   const active = s === game.status;
                   return (
                     <TouchableOpacity
