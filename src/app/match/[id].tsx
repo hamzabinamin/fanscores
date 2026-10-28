@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import auth from '@react-native-firebase/auth';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-    ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Modal, Platform,
+    ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform,
     ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,9 +19,11 @@ import {
     Game,
     gameFromDoc, gamesCollection,
     inningsLabel,
+    isRacketSport,
     sideLabel,
     statusesForSport,
-    updateCricketState, updateGameScore, updateGameStatus,
+    TennisState,
+    updateCricketState, updateGameScore, updateGameStatus, updateTennisState,
 } from '../../models/Game';
 
 export default function MatchDetailScreen() {
@@ -88,12 +91,15 @@ export default function MatchDetailScreen() {
 
   const kickoff = game.kickoff?.toDate();
   const isCricket = game.sport === 'Cricket';
+  const isRacket = isRacketSport(game.sport);
   const statuses = statusesForSport(game.sport);
   const cricket: CricketState = game.cricket ?? emptyCricketState();
   const battingSide = cricket.battingSide;
   const activeInnings: CricketInnings | null = battingSide ? cricket[battingSide] : null;
 
-  // --- score with confirmation (non-cricket) ---
+  const tennis: TennisState = game.tennis ?? { setsFormat: 'Best of 3', player1: '', player2: '', homeSets: 0, awaySets: 0 };
+
+  // --- score with confirmation (non-cricket, non-racket) ---
   const changeScore = (side: 'home' | 'away', delta: number) => {
     const newHome = side === 'home' ? Math.max(0, (game.homeScore ?? 0) + delta) : (game.homeScore ?? 0);
     const newAway = side === 'away' ? Math.max(0, (game.awayScore ?? 0) + delta) : (game.awayScore ?? 0);
@@ -108,10 +114,32 @@ export default function MatchDetailScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Confirm',
-          onPress: () => updateGameScore(game.id, newHome, newAway).catch(() => Alert.alert('Error', 'Could not update score.')),
+          onPress: () => updateGameScore(game.id, newHome, newAway, game).catch(() => Alert.alert('Error', 'Could not update score.')),
         },
       ]
     );
+  };
+
+  // --- tennis / padel: change a side's set count ---
+  const maxSets = tennis.setsFormat === 'Best of 5' ? 5 : 3;
+  const setsToWin = Math.ceil(maxSets / 2); // 2 for best of 3, 3 for best of 5
+
+  const changeSets = (side: 'home' | 'away', delta: number) => {
+    const current = side === 'home' ? tennis.homeSets : tennis.awaySets;
+    const next = Math.max(0, Math.min(setsToWin, current + delta));
+    if (next === current) return;
+
+    const playerName = side === 'home' ? (tennis.player1 || game.homeTeam.name) : (tennis.player2 || game.awayTeam.name);
+    const verb = delta > 0 ? 'add a set to' : 'remove a set from';
+    const nextTennis: TennisState = {
+      ...tennis,
+      homeSets: side === 'home' ? next : tennis.homeSets,
+      awaySets: side === 'away' ? next : tennis.awaySets,
+    };
+    Alert.alert('Update Sets', `Are you sure you want to ${verb} ${playerName}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Confirm', onPress: () => updateTennisState(game.id, nextTennis, game).catch(() => Alert.alert('Error', 'Could not update.')) },
+    ]);
   };
 
   // --- cricket: write a patch to the batting side's innings ---
@@ -124,7 +152,7 @@ export default function MatchDetailScreen() {
     const next: CricketState = { ...cricket, [battingSide]: { ...current, ...patch } };
     Alert.alert(title, msg, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Confirm', onPress: () => updateCricketState(game.id, next).catch(() => Alert.alert('Error', 'Could not update.')) },
+      { text: 'Confirm', onPress: () => updateCricketState(game.id, next, game).catch(() => Alert.alert('Error', 'Could not update.')) },
     ]);
   };
 
@@ -140,6 +168,11 @@ export default function MatchDetailScreen() {
 
   const addBall = () => {
     if (!activeInnings) return;
+    // respect the overs cap for this match
+    if (cricket.totalOvers > 0 && activeInnings.overs >= cricket.totalOvers) {
+      Alert.alert('Overs complete', `This innings has reached its ${cricket.totalOvers}-over limit.`);
+      return;
+    }
     let overs = activeInnings.overs;
     let balls = activeInnings.balls + 1;
     if (balls >= 6) { overs += 1; balls = 0; }
@@ -178,8 +211,8 @@ export default function MatchDetailScreen() {
     if (cricket.battingSide === side) return;
     const name = side === 'home' ? game.homeTeam.name : game.awayTeam.name;
     Alert.alert('Set Batting Side', `Switch to ${name}'s innings?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Confirm', onPress: () => updateCricketState(game.id, { ...cricket, battingSide: side }).catch(() => Alert.alert('Error', 'Could not update.')) },
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Confirm', onPress: () => updateCricketState(game.id, { ...cricket, battingSide: side }, game).catch(() => Alert.alert('Error', 'Could not update.')) },
     ]);
   };
 
@@ -202,9 +235,14 @@ export default function MatchDetailScreen() {
   // --- share ---
   const onShare = async () => {
     try {
-      const scoreStr = isCricket
-        ? `${game.homeTeam.name} ${inningsLabel(cricket.home)} · ${game.awayTeam.name} ${inningsLabel(cricket.away)}`
-        : `${game.homeScore ?? 0}:${game.awayScore ?? 0}`;
+      let scoreStr: string;
+      if (isCricket) {
+        scoreStr = `${game.homeTeam.name} ${inningsLabel(cricket.home)} · ${game.awayTeam.name} ${inningsLabel(cricket.away)}`;
+      } else if (isRacket) {
+        scoreStr = `${tennis.player1 || game.homeTeam.name} ${tennis.homeSets} - ${tennis.awaySets} ${tennis.player2 || game.awayTeam.name}`;
+      } else {
+        scoreStr = `${game.homeScore ?? 0}:${game.awayScore ?? 0}`;
+      }
       await Share.share({
         message: `${game.homeTeam.name} vs ${game.awayTeam.name} — ${scoreStr} (${game.status})`,
       });
@@ -257,7 +295,7 @@ export default function MatchDetailScreen() {
     return (
       <View style={styles.teamCol}>
         <View style={[styles.logoWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {logo ? <Image source={{ uri: logo }} style={styles.logo} />
+          {logo ? <Image source={{ uri: logo }} style={styles.logo} cachePolicy="memory-disk" transition={150} placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }} />
                 : <Text style={styles.logoFallback} numberOfLines={1}>{side.name}</Text>}
         </View>
         <Text style={[styles.teamName, { color: colors.text }]} numberOfLines={1}>{side.name}</Text>
@@ -269,10 +307,11 @@ export default function MatchDetailScreen() {
   };
 
   // options for the active picker
+  const oversMax = cricket.totalOvers > 0 ? cricket.totalOvers : 50;
   const pickerOptions =
     picker === 'wickets'
-      ? Array.from({ length: 11 }, (_, i) => i)          // 0..10
-      : Array.from({ length: 51 }, (_, i) => i);         // 0..50 overs
+      ? Array.from({ length: 11 }, (_, i) => i)                 // 0..10
+      : Array.from({ length: oversMax + 1 }, (_, i) => i);      // 0..totalOvers
   const currentPickerValue = activeInnings ? (picker === 'wickets' ? activeInnings.wickets : activeInnings.overs) : null;
 
   return (
@@ -334,6 +373,12 @@ export default function MatchDetailScreen() {
 
                 {isCricket ? (
                   <View>
+                    {cricket.totalOvers > 0 && (
+                      <Text style={[styles.oversCap, { color: colors.textMuted }]}>
+                        {cricket.totalOvers} overs per side
+                      </Text>
+                    )}
+
                     {/* Batting toggle */}
                     <View style={styles.battingRow}>
                       {(['home', 'away'] as const).map((s) => {
@@ -379,7 +424,7 @@ export default function MatchDetailScreen() {
                           ))}
                         </View>
 
-                        {/* Wicket + over controls (tap to increment, long-press dots for quick set) */}
+                        {/* Wicket + over controls (tap to increment, long-press for quick set) */}
                         <View style={styles.cricketActionRow}>
                           <TouchableOpacity
                             style={[styles.cricketAction, { borderColor: '#ef4444' }]}
@@ -414,6 +459,41 @@ export default function MatchDetailScreen() {
                         Select a batting team above to start scoring.
                       </Text>
                     )}
+                  </View>
+                ) : isRacket ? (
+                  <View>
+                    <Text style={[styles.oversCap, { color: colors.textMuted }]}>
+                      {tennis.setsFormat} · first to {setsToWin} sets
+                    </Text>
+
+                    {/* Players + set counters */}
+                    <View style={styles.setsRow}>
+                      {/* Player 1 (home) */}
+                      <View style={styles.setsCol}>
+                        <Text style={[styles.playerName, { color: colors.text }]} numberOfLines={1}>
+                          {tennis.player1 || game.homeTeam.name}
+                        </Text>
+                        <View style={styles.setControls}>
+                          <ScoreButton symbol="–" onPress={() => changeSets('home', -1)} />
+                          <Text style={[styles.setNum, { color: colors.text }]}>{tennis.homeSets}</Text>
+                          <ScoreButton symbol="+" onPress={() => changeSets('home', +1)} />
+                        </View>
+                      </View>
+
+                      <Text style={[styles.setsDivider, { color: colors.textMuted }]}>sets</Text>
+
+                      {/* Player 2 (away) */}
+                      <View style={styles.setsCol}>
+                        <Text style={[styles.playerName, { color: colors.text }]} numberOfLines={1}>
+                          {tennis.player2 || game.awayTeam.name}
+                        </Text>
+                        <View style={styles.setControls}>
+                          <ScoreButton symbol="–" onPress={() => changeSets('away', -1)} />
+                          <Text style={[styles.setNum, { color: colors.text }]}>{tennis.awaySets}</Text>
+                          <ScoreButton symbol="+" onPress={() => changeSets('away', +1)} />
+                        </View>
+                      </View>
+                    </View>
                   </View>
                 ) : (
                   <View style={styles.scoreControls}>
@@ -470,6 +550,7 @@ export default function MatchDetailScreen() {
             </Text>
           }
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
+          showsVerticalScrollIndicator={false}
         />
 
         {/* Composer */}
@@ -525,6 +606,7 @@ export default function MatchDetailScreen() {
                     </TouchableOpacity>
                   );
                 }}
+                showsVerticalScrollIndicator={false}
               />
             </View>
           </TouchableOpacity>
@@ -565,6 +647,8 @@ const styles = StyleSheet.create({
   scoreBtnText: { fontSize: 22, fontWeight: '600' },
   scoreNum: { fontSize: 40, fontWeight: 'bold', minWidth: 60, textAlign: 'center' },
 
+  oversCap: { fontSize: 12, fontWeight: '600', textAlign: 'center', marginBottom: 12 },
+
   // cricket
   battingRow: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16, gap: 8 },
   battingPill: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, maxWidth: '46%' },
@@ -583,6 +667,14 @@ const styles = StyleSheet.create({
   quickRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
   quickBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 },
   quickBtnText: { fontSize: 13, fontWeight: '600' },
+
+  // tennis / padel
+  setsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  setsCol: { flex: 1, alignItems: 'center' },
+  playerName: { fontSize: 15, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
+  setControls: { flexDirection: 'row', alignItems: 'center' },
+  setNum: { fontSize: 36, fontWeight: 'bold', minWidth: 50, textAlign: 'center' },
+  setsDivider: { fontSize: 13, fontWeight: '600', paddingHorizontal: 6 },
 
   // picker modal
   pickerOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 24 },

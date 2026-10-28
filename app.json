@@ -1,18 +1,17 @@
 {
   "expo": {
-    "name": "FanScores",
+    "name": "MyFanScores",
     "slug": "FanScores",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/app-icon.png",
     "scheme": "fanscores",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/images/icon.png",
     "ios": {
       "bundleIdentifier": "com.fanscores.app",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "newArchEnabled": true,
+      "newArchEnabled": false,
       "deploymentTarget": "16.4",
-      "icon": "./assets/expo.icon",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -21,8 +20,8 @@
       "package": "com.fanscores.app",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/app-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#208AEF"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -46,6 +45,7 @@
       "expo-web-browser",
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
+      "expo-notifications",
       [
         "expo-build-properties",
         {
@@ -54,7 +54,8 @@
           }
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true,

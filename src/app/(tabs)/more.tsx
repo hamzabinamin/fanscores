@@ -2,10 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import storage from '@react-native-firebase/storage';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DateTimeField from '../../components/DateTimeField';
 import GlobalHeader from '../../components/GlobalHeader';
 import SelectField from '../../components/SelectField';
@@ -43,13 +44,13 @@ export default function MoreScreen() {
   const [teamName, setTeamName] = useState('');
   const [shortName, setShortName] = useState('');
   const [town, setTown] = useState('');
-  const [county, setCounty] = useState('');
+  const [country, setCountry] = useState('');
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(true);
-  const [editForm, setEditForm] = useState({ name: '', shortName: '', town: '', county: '' });
+  const [editForm, setEditForm] = useState({ name: '', shortName: '', town: '', country: '' });
   const [editLogoUri, setEditLogoUri] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -168,11 +169,11 @@ export default function MoreScreen() {
   };
 
   const resetForm = () => {
-    setTeamName(''); setShortName(''); setTown(''); setCounty(''); setLogoUri(null);
+    setTeamName(''); setShortName(''); setTown(''); setCountry(''); setLogoUri(null);
   };
 
   const openEmail = async (subject: string) => {
-    const to = 'support@fanscores.com';   
+    const to = 'info@myfanscores.com';   
     const url = `mailto:${to}?subject=${encodeURIComponent(subject)}`;
     try {
       const canOpen = await Linking.canOpenURL(url);
@@ -206,7 +207,7 @@ export default function MoreScreen() {
 
       await teamsCollection().add(
         newTeamPayload(
-          { name: teamName, shortName, town, county, logoUrl },
+          { name: teamName, shortName, town, country, logoUrl },
           auth().currentUser?.uid ?? null
         )
       );
@@ -323,7 +324,7 @@ export default function MoreScreen() {
           name: editForm.name,
           shortName: editForm.shortName,
           town: editForm.town,
-          county: editForm.county,
+          country: editForm.country,
           ...(newLogoUrl !== undefined && { logoUrl: newLogoUrl }),
         })
       );
@@ -348,7 +349,7 @@ export default function MoreScreen() {
       name: team.name ?? '',
       shortName: team.shortName ?? '',
       town: team.town ?? '',
-      county: team.county ?? '',
+      country: team.country ?? '',
     });
     setEditLogoUri(null);
   };
@@ -559,7 +560,7 @@ export default function MoreScreen() {
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollForm}>
             <TouchableOpacity style={[styles.uploadBox, { borderColor: colors.border }]} onPress={pickLogo} activeOpacity={0.7}>
               {logoUri ? (
-                <Image source={{ uri: logoUri }} style={styles.logoPreview} />
+                <Image source={{ uri: logoUri }} style={styles.logoPreview} cachePolicy="memory-disk" transition={150} placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }} />
               ) : (
                 <>
                   <Ionicons name="arrow-up-outline" size={24} color={colors.textMuted} />
@@ -605,13 +606,13 @@ export default function MoreScreen() {
               </View>
 
               <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>County</Text>
+                <Text style={[styles.fieldLabel, { color: colors.text }]}>Country</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
-                  placeholder="Enter county"
+                  placeholder="Enter country"
                   placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
-                  value={county}
-                  onChangeText={setCounty}
+                  value={country}
+                  onChangeText={setCountry}
                 />
               </View>
             </View>
@@ -702,9 +703,9 @@ export default function MoreScreen() {
                         />
                         <TextInput
                           style={[styles.modalInput, { width: '48%', backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
-                          value={editForm.county}
-                          onChangeText={(t) => setEditForm((f) => ({ ...f, county: t }))}
-                          placeholder="County"
+                          value={editForm.country}
+                          onChangeText={(t) => setEditForm((f) => ({ ...f, country: t }))}
+                          placeholder="Country"
                           placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
                         />
                       </View>
@@ -739,7 +740,7 @@ export default function MoreScreen() {
                       <View style={styles.teamInfoSide}>
                         <View style={[styles.logoCircleSmall, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, overflow: 'hidden' }]}>
                           {team.logoUrl ? (
-                            <Image source={{ uri: team.logoUrl }} style={{ width: '100%', height: '100%' }} />
+                            <Image source={{ uri: team.logoUrl }} style={{ width: '100%', height: '100%' }} cachePolicy="memory-disk" transition={150} placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }} />
                           ) : (
                             <Ionicons name="trophy" size={20} color="#facc15" />
                           )}

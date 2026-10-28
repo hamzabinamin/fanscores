@@ -18,7 +18,7 @@ export default function LoginScreen() {
 
   // Country picker state — default to Pakistan
   const [country, setCountry] = useState<Country>(
-    countries.find((c) => c.code === 'PK') ?? countries[0]
+    countries.find((c) => c.code === 'HK') ?? countries[0]
   );
   const [pickerVisible, setPickerVisible] = useState(false);
   const [search, setSearch] = useState('');
@@ -191,6 +191,7 @@ export default function LoginScreen() {
                     <Text style={[styles.countryDial, { color: colors.textMuted }]}>{item.dialCode}</Text>
                   </TouchableOpacity>
                 )}
+                showsVerticalScrollIndicator={false}
               />
             </View>
           </View>

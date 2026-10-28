@@ -1,5 +1,5 @@
 import firestore, {
-    FirebaseFirestoreTypes,
+  FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
 
 // The shape of a Team document in Firestore (no id — that's the doc key)
@@ -7,7 +7,7 @@ export interface TeamData {
   name: string;
   shortName: string | null;
   town: string | null;
-  county: string | null;
+  country: string | null;
   logoUrl: string | null;
   createdBy: string | null;
   createdAt: FirebaseFirestoreTypes.Timestamp | null;
@@ -24,7 +24,7 @@ export interface TeamInput {
   name: string;
   shortName?: string;
   town?: string;
-  county?: string;
+  country?: string;
   logoUrl?: string | null;
 }
 
@@ -42,7 +42,7 @@ export function teamFromDoc(
     name: data.name ?? '',
     shortName: data.shortName ?? null,
     town: data.town ?? null,
-    county: data.county ?? null,
+    country: data.country ?? null,
     logoUrl: data.logoUrl ?? null,
     createdBy: data.createdBy ?? null,
     createdAt: data.createdAt ?? null,
@@ -56,7 +56,7 @@ export function newTeamPayload(input: TeamInput, uid: string | null) {
     name: input.name.trim(),
     shortName: input.shortName?.trim() || null,
     town: input.town?.trim() || null,
-    county: input.county?.trim() || null,
+    country: input.country?.trim() || null,
     logoUrl: input.logoUrl ?? null,
     createdBy: uid,
     createdAt: firestore.FieldValue.serverTimestamp(),
@@ -70,7 +70,7 @@ export function updateTeamPayload(input: TeamInput) {
     name: input.name.trim(),
     shortName: input.shortName?.trim() || null,
     town: input.town?.trim() || null,
-    county: input.county?.trim() || null,
+    country: input.country?.trim() || null,
     updatedAt: firestore.FieldValue.serverTimestamp(),
   };
   // only overwrite logoUrl when a new one was provided
@@ -80,7 +80,7 @@ export function updateTeamPayload(input: TeamInput) {
 
 // Display helpers — keep formatting logic out of components
 export function teamLocation(team: Team): string {
-  return [team.town, team.county].filter(Boolean).join(', ') || 'No location set';
+  return [team.town, team.country].filter(Boolean).join(', ') || 'No location set';
 }
 
 export function teamDisplayName(team: Team): string {

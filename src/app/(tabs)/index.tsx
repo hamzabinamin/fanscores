@@ -10,7 +10,7 @@ import { deleteGame, Game, gameFromDoc, gamesCollection } from '../../models/Gam
 
 export default function HomeScreen() {
   const { colors } = useAppTheme();
-  const { teams, selectedTeam } = useAppFilter();
+  const { teams, selectedTeam, country } = useAppFilter();
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -33,9 +33,18 @@ export default function HomeScreen() {
     return () => unsub();
   }, []);
 
-  const visibleGames = selectedTeam
-    ? games.filter((g) => g.homeTeam.id === selectedTeam.id || g.awayTeam.id === selectedTeam.id)
-    : games;
+  // apply the header's country + team filters
+  const visibleGames = games.filter((g) => {
+    // country: either side plays for the selected country
+    if (country && g.homeTeam.country !== country && g.awayTeam.country !== country) {
+      return false;
+    }
+    // team: either side is the selected team
+    if (selectedTeam && g.homeTeam.id !== selectedTeam.id && g.awayTeam.id !== selectedTeam.id) {
+      return false;
+    }
+    return true;
+  });
 
   const confirmDelete = (game: Game) => {
     swipeRefs.current[game.id]?.close(); // snap the row back
@@ -71,6 +80,8 @@ export default function HomeScreen() {
   }
 
   if (visibleGames.length === 0) {
+    // tailor the empty message to whether a filter is active
+    const filtered = !!country || !!selectedTeam;
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <GlobalHeader />
@@ -80,14 +91,18 @@ export default function HomeScreen() {
           </View>
           <Text style={[styles.title, { color: colors.text }]}>No Fixtures Yet</Text>
           <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-            Get started by creating your first fixture. Add some teams first, then schedule a match between them.
+            {filtered
+              ? 'No fixtures match the selected filters. Try choosing a different country or team.'
+              : 'Get started by creating your first fixture. Add some teams first, then schedule a match between them.'}
           </Text>
-          <View style={styles.hintRow}>
-            <Ionicons name="calendar-outline" size={16} color={colors.textMuted} style={{ marginRight: 6 }} />
-            <Text style={[styles.hintText, { color: colors.textMuted }]}>
-              Click "Create Fixture" in the header to begin
-            </Text>
-          </View>
+          {!filtered && (
+            <View style={styles.hintRow}>
+              <Ionicons name="calendar-outline" size={16} color={colors.textMuted} style={{ marginRight: 6 }} />
+              <Text style={[styles.hintText, { color: colors.textMuted }]}>
+                Click "Create Fixture" in the header to begin
+              </Text>
+            </View>
+          )}
         </View>
       </View>
     );
@@ -131,7 +146,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: 90,
-    marginBottom: 16,   // matches FixtureCard's marginBottom so it aligns
+    marginBottom: 16,
     borderRadius: 16,
     marginLeft: 8,
   },

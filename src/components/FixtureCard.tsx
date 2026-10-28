@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import auth from '@react-native-firebase/auth';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Alert, Image, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAppTheme } from '../context/ThemeContext';
 import { Game, inningsLabel, sideLabel } from '../models/Game';
 import { setGameSubscription } from '../models/notifications';
@@ -72,7 +73,7 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
       <View style={styles.teamBlock}>
         <View style={[styles.logoWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {logo ? (
-            <Image source={{ uri: logo }} style={styles.logo} />
+            <Image source={{ uri: logo }} style={styles.logo} cachePolicy="memory-disk" transition={150} placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }} />
           ) : (
             <Text style={[styles.logoFallback, { color: '#3b82f6' }]} numberOfLines={1}>
               {side.name}
@@ -93,15 +94,27 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
     >
       {/* Header row: sport / gender / status */}
       <View style={styles.headerRow}>
-        <Text style={styles.sport}>{game.sport.toUpperCase()}</Text>
-        <View style={[styles.pill, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-          <Text style={[styles.pillText, { color: colors.text }]}>{game.gender}</Text>
+        {/* Left: sport */}
+        <View style={styles.headerSide}>
+          <Text style={styles.sport}>{game.sport.toUpperCase()}</Text>
         </View>
-        <View style={[styles.pill, { backgroundColor: theme === 'dark' ? '#2a2a2d' : '#e5e5ea' }]}>
-          <Text style={[styles.pillText, { color: colors.textMuted }]}>{game.status}</Text>
+
+        {/* Center: gender */}
+        <View style={styles.headerCenter}>
+          <View style={[styles.pill, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+            <Text style={[styles.pillText, { color: colors.text }]}>{game.gender}</Text>
+          </View>
         </View>
-        <View style={{ flex: 1 }} />
-        <Ionicons name="checkmark-circle-outline" size={22} color="#3b82f6" />
+
+        {/* Right: status + tick */}
+        <View style={[styles.headerSide, styles.headerRight]}>
+          <View style={[styles.pill, { backgroundColor: theme === 'dark' ? '#2a2a2d' : '#e5e5ea', marginRight: 8 }]}>
+            <Text style={[styles.pillText, { color: colors.textMuted }]}>{game.status}</Text>
+          </View>
+          {game.isAssociated && (
+            <Ionicons name="checkmark-circle" size={22} color="#3b82f6" />
+          )}
+        </View>
       </View>
 
       {/* Teams + score */}
@@ -139,21 +152,18 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
           <Ionicons name="time-outline" size={15} color={colors.textMuted} />
           <Text style={[styles.footerText, { color: colors.textMuted }]}>{timeStr}</Text>
         </View>
-        <View style={styles.footerItem}>
+        <View style={[styles.footerItem, styles.footerItemFlex]}>
           <Ionicons name="location-outline" size={15} color={colors.textMuted} />
           <Text style={[styles.footerText, { color: colors.textMuted }]} numberOfLines={1}>{game.location}</Text>
         </View>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={toggleSubscribe} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginRight: 16 }}>
-          <Ionicons
-            name={subscribed ? 'notifications' : 'notifications-outline'}
-            size={18}
-            color={subscribed ? '#3b82f6' : colors.textMuted}
-          />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={onShare} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="share-social-outline" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
+        <View style={styles.footerActions}>
+          <TouchableOpacity onPress={toggleSubscribe} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginRight: 16 }}>
+            <Ionicons name={subscribed ? 'notifications' : 'notifications-outline'} size={18} color={subscribed ? '#3b82f6' : colors.textMuted} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onShare} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="share-social-outline" size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -162,6 +172,10 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
 const styles = StyleSheet.create({
   card: { borderRadius: 16, borderWidth: 1, padding: 16, marginBottom: 16 },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  headerSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  headerRight: { justifyContent: 'flex-end' },
+
   sport: { color: '#3b82f6', fontWeight: 'bold', fontSize: 14, marginRight: 10 },
   pill: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4, marginRight: 8, borderWidth: StyleSheet.hairlineWidth },
   pillText: { fontSize: 13, fontWeight: '600' },
@@ -180,5 +194,7 @@ const styles = StyleSheet.create({
   divider: { height: StyleSheet.hairlineWidth, marginVertical: 16 },
   footerRow: { flexDirection: 'row', alignItems: 'center' },
   footerItem: { flexDirection: 'row', alignItems: 'center', marginRight: 14 },
+  footerItemFlex: { flexShrink: 1, minWidth: 0 },
+  footerActions: { flexDirection: 'row', alignItems: 'center', flexShrink: 0, marginLeft: 'auto' },
   footerText: { fontSize: 13, marginLeft: 5 },
 });

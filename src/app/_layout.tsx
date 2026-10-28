@@ -7,35 +7,49 @@ import { AppFilterProvider } from '../context/AppFilterContext';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { ThemeProvider, useAppTheme } from '../context/ThemeContext';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,   // replaces shouldShowAlert (the heads-up banner)
-    shouldShowList: true,     // show in the notification center/list
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
-
 function RootStack() {
   const { theme } = useAppTheme();
   const { user, loading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
+  // configure how notifications display while the app is foregrounded
+  useEffect(() => {
+    try {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }),
+      });
+    } catch (e) {
+      console.warn('Notification handler setup failed:', e);
+    }
+  }, []);
+
   // deep-link: tapping a notification opens the match screen
   useEffect(() => {
-    // cold start: app opened by tapping a notification
-    Notifications.getLastNotificationResponseAsync().then((response) => {
-      const gameId = response?.notification.request.content.data?.gameId;
-      if (gameId) router.push(`/match/${gameId}`);
-    });
+    let sub: Notifications.Subscription | undefined;
+    try {
+      // cold start: app opened by tapping a notification
+      Notifications.getLastNotificationResponseAsync()
+        .then((response) => {
+          const gameId = response?.notification.request.content.data?.gameId;
+          if (gameId) router.push(`/match/${gameId}`);
+        })
+        .catch(() => {});
 
-    // warm: app already running when the notification is tapped
-    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const gameId = response.notification.request.content.data?.gameId;
-      if (gameId) router.push(`/match/${gameId}`);
-    });
-    return () => sub.remove();
+      // warm: app already running when the notification is tapped
+      sub = Notifications.addNotificationResponseReceivedListener((response) => {
+        const gameId = response.notification.request.content.data?.gameId;
+        if (gameId) router.push(`/match/${gameId}`);
+      });
+    } catch (e) {
+      console.warn('Notification listener setup failed:', e);
+    }
+    return () => sub?.remove();
   }, []);
 
   useEffect(() => {
