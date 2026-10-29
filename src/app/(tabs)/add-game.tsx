@@ -9,10 +9,8 @@ import SelectField from '../../components/SelectField';
 import { COUNTRY_NAMES } from '../../constants/countries';
 import { GENDERS, LEVELS, SPORTS, TYPES } from '../../constants/gameOptions';
 import { useAppTheme } from '../../context/ThemeContext';
+import { isRacketSport, usesTennisPoints } from '../../models/Game';
 import { Team, teamFromDoc, teamsCollection } from '../../models/Team';
-
-// sports that use the sets + two-player format
-const RACKET_SPORTS = ['Tennis', 'Padel'];
 
 export default function AddGameScreen() {
   const { colors, theme } = useAppTheme();
@@ -38,9 +36,7 @@ export default function AddGameScreen() {
   const [gender, setGender] = useState('Men');
 
   // --- sport-specific extras ---
-  // cricket
   const [cricketOvers, setCricketOvers] = useState('');
-  // tennis / padel
   const [setsFormat, setSetsFormat] = useState('');
   const [player1, setPlayer1] = useState('');
   const [player2, setPlayer2] = useState('');
@@ -56,7 +52,6 @@ export default function AddGameScreen() {
     return () => unsub();
   }, []);
 
-  // teams filtered by each side's selected country
   const homeTeamOptions = teams
     .filter((t) => !homeCountry || t.country === homeCountry)
     .map((t) => t.name);
@@ -69,21 +64,14 @@ export default function AddGameScreen() {
   const awayTeamDoc = teams.find((t) => t.name === awayTeam);
 
   const isCricket = sport === 'Cricket';
-  const isRacket = RACKET_SPORTS.includes(sport);
-  // Tennis allows Best of 3 or 5; Padel only Best of 3
+  const isRacket = isRacketSport(sport);
+  const tennisPoints = usesTennisPoints(sport); // Tennis/Padel use player names + Best of 3/5
+  // Padel only Best of 3; Tennis Best of 3 or 5; Volleyball/Badminton fixed Best of 3
   const setsOptions = sport === 'Padel' ? ['Best of 3'] : ['Best of 3', 'Best of 5'];
 
-  const onSelectHomeCountry = (c: string) => {
-    setHomeCountry(c);
-    setHomeTeam('');
-  };
+  const onSelectHomeCountry = (c: string) => { setHomeCountry(c); setHomeTeam(''); };
+  const onSelectAwayCountry = (c: string) => { setAwayCountry(c); setAwayTeam(''); };
 
-  const onSelectAwayCountry = (c: string) => {
-    setAwayCountry(c);
-    setAwayTeam('');
-  };
-
-  // changing the sport resets the sport-specific extras so stale values don't carry over
   const onSelectSport = (s: string) => {
     setSport(s);
     setCricketOvers('');
@@ -134,14 +122,16 @@ export default function AddGameScreen() {
       if (!setsFormat) {
         Alert.alert('Missing info', 'Please select the number of sets.'); return;
       }
-      if (!player1.trim() || !player2.trim()) {
+      // Tennis/Padel need explicit player names; Volleyball/Badminton use team names
+      if (tennisPoints && (!player1.trim() || !player2.trim())) {
         Alert.alert('Missing info', 'Please enter both player names.'); return;
       }
     }
 
-    // combine date + time into one kickoff timestamp
     const kickoff = new Date(date);
     kickoff.setHours(time.getHours(), time.getMinutes(), 0, 0);
+
+    const numSets = setsFormat === 'Best of 5' ? 5 : 3;
 
     setSubmitting(true);
     try {
@@ -165,11 +155,13 @@ export default function AddGameScreen() {
           : null,
         tennis: isRacket
           ? {
-              setsFormat,                 // "Best of 3" | "Best of 5"
-              player1: player1.trim(),
-              player2: player2.trim(),
-              homeSets: 0,
-              awaySets: 0,
+              setsFormat,
+              // Tennis/Padel use entered player names; Volleyball/Badminton use team names
+              player1: tennisPoints ? player1.trim() : homeTeam.trim(),
+              player2: tennisPoints ? player2.trim() : awayTeam.trim(),
+              sets: Array.from({ length: numSets }, () => ({ home: 0, away: 0 })),
+              homePoint: 0,
+              awayPoint: 0,
             }
           : null,
         winner: null,
@@ -209,21 +201,9 @@ export default function AddGameScreen() {
           containerStyle={{ marginBottom: 8 }}
         />
         <View style={styles.gridRow}>
-          <SelectField
-            placeholder="Team" title="Home Team" small
-            value={homeTeam} options={homeTeamOptions} onSelect={setHomeTeam}
-            containerStyle={styles.gridItem}
-          />
-          <SelectField
-            placeholder="Level" title="Home Level" small
-            value={homeLevel} options={LEVELS} onSelect={setHomeLevel}
-            containerStyle={styles.gridItem}
-          />
-          <SelectField
-            placeholder="Type" title="Home Type" small
-            value={homeType} options={TYPES} onSelect={setHomeType}
-            containerStyle={styles.gridItem}
-          />
+          <SelectField placeholder="Team" title="Home Team" small value={homeTeam} options={homeTeamOptions} onSelect={setHomeTeam} containerStyle={styles.gridItem} />
+          <SelectField placeholder="Level" title="Home Level" small value={homeLevel} options={LEVELS} onSelect={setHomeLevel} containerStyle={styles.gridItem} />
+          <SelectField placeholder="Type" title="Home Type" small value={homeType} options={TYPES} onSelect={setHomeType} containerStyle={styles.gridItem} />
         </View>
 
         {/* --- AWAY TEAM --- */}
@@ -234,21 +214,9 @@ export default function AddGameScreen() {
           containerStyle={{ marginBottom: 8 }}
         />
         <View style={styles.gridRow}>
-          <SelectField
-            placeholder="Team" title="Away Team" small
-            value={awayTeam} options={awayTeamOptions} onSelect={setAwayTeam}
-            containerStyle={styles.gridItem}
-          />
-          <SelectField
-            placeholder="Level" title="Away Level" small
-            value={awayLevel} options={LEVELS} onSelect={setAwayLevel}
-            containerStyle={styles.gridItem}
-          />
-          <SelectField
-            placeholder="Type" title="Away Type" small
-            value={awayType} options={TYPES} onSelect={setAwayType}
-            containerStyle={styles.gridItem}
-          />
+          <SelectField placeholder="Team" title="Away Team" small value={awayTeam} options={awayTeamOptions} onSelect={setAwayTeam} containerStyle={styles.gridItem} />
+          <SelectField placeholder="Level" title="Away Level" small value={awayLevel} options={LEVELS} onSelect={setAwayLevel} containerStyle={styles.gridItem} />
+          <SelectField placeholder="Type" title="Away Type" small value={awayType} options={TYPES} onSelect={setAwayType} containerStyle={styles.gridItem} />
         </View>
 
         {/* --- DATE & TIME --- */}
@@ -299,39 +267,43 @@ export default function AddGameScreen() {
           </View>
         )}
 
-        {/* --- TENNIS / PADEL OPTIONS --- */}
+        {/* --- RACKET SPORT OPTIONS (Tennis / Padel / Beach Volleyball / Badminton) --- */}
         {isRacket && (
           <View style={[styles.optionsBox, { backgroundColor: colors.innerCard, borderColor: colors.border }]}>
             <Text style={[styles.optionsTitle, { color: colors.text }]}>{sport} Options</Text>
 
-            <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 8 }]}>Number of Sets</Text>
+            <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 8 }]}>
+              {sport === 'Badminton' ? 'Number of Games' : 'Number of Sets'}
+            </Text>
             <SelectField
-              placeholder="Select sets" title="Number of Sets"
+              placeholder="Select format"
+              title={sport === 'Badminton' ? 'Number of Games' : 'Number of Sets'}
               value={setsFormat} options={setsOptions} onSelect={setSetsFormat}
             />
 
-            <View style={[styles.gridRow, { marginTop: 4 }]}>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Player 1</Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
-                  placeholder="Player 1 name"
-                  placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
-                  value={player1}
-                  onChangeText={setPlayer1}
-                />
+            {/* Player names only for Tennis/Padel (player-vs-player). Volleyball/Badminton use team names. */}
+            {tennisPoints && (
+              <View style={[styles.gridRow, { marginTop: 4 }]}>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>Player 1</Text>
+                  <TextInput
+                    style={[styles.textInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                    placeholder="Player 1 name"
+                    placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                    value={player1} onChangeText={setPlayer1}
+                  />
+                </View>
+                <View style={{ width: '48%' }}>
+                  <Text style={[styles.fieldLabel, { color: colors.text }]}>Player 2</Text>
+                  <TextInput
+                    style={[styles.textInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                    placeholder="Player 2 name"
+                    placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+                    value={player2} onChangeText={setPlayer2}
+                  />
+                </View>
               </View>
-              <View style={{ width: '48%' }}>
-                <Text style={[styles.fieldLabel, { color: colors.text }]}>Player 2</Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
-                  placeholder="Player 2 name"
-                  placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
-                  value={player2}
-                  onChangeText={setPlayer2}
-                />
-              </View>
-            </View>
+            )}
           </View>
         )}
 
@@ -383,8 +355,6 @@ const styles = StyleSheet.create({
 
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   gridItem: { width: '31%', paddingVertical: 11, paddingHorizontal: 10, marginBottom: 16 },
-  gridInput: { width: '31%', borderWidth: 1, borderRadius: 8, paddingVertical: 12, paddingHorizontal: 10, fontSize: 14, marginBottom: 16 },
-  naCell: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderRadius: 8 },
 
   textInput: { borderWidth: 1, borderRadius: 8, padding: 14, fontSize: 14 },
 

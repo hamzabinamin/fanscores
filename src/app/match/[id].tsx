@@ -2,12 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import auth from '@react-native-firebase/auth';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import * as Sharing from 'expo-sharing';
+import { useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform,
+    ActivityIndicator, Alert, Animated, FlatList, KeyboardAvoidingView, Modal, Platform,
     ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { captureRef } from 'react-native-view-shot';
 import { useAppFilter } from '../../context/AppFilterContext';
 import { useAppTheme } from '../../context/ThemeContext';
 import {
@@ -16,15 +18,38 @@ import {
 import {
     CricketInnings, CricketState,
     emptyCricketState,
+    finishedStatusForSport,
     Game,
     gameFromDoc, gamesCollection,
     inningsLabel,
     isRacketSport,
+    setUnitLabel,
+    setWinnerAndFinish,
+    showsPulse,
     sideLabel,
     statusesForSport,
-    TennisState,
+    TENNIS_POINT_LABELS,
+    TennisSet, TennisState,
     updateCricketState, updateGameScore, updateGameStatus, updateTennisState,
+    usesTennisPoints
 } from '../../models/Game';
+
+// a small pulsing dot (keeps whatever color passed in)
+function PulsingDot({ color }: { color: string }) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 0.2, duration: 600, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity]);
+  return <Animated.View style={[dotStyles.dot, { backgroundColor: color, opacity }]} />;
+}
+const dotStyles = StyleSheet.create({ dot: { width: 7, height: 7, borderRadius: 4, marginRight: 6 } });
 
 export default function MatchDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -40,13 +65,23 @@ export default function MatchDetailScreen() {
   const [guestName, setGuestName] = useState('');
   const [sending, setSending] = useState(false);
 
-  // quick-select picker: which field, and whether it's open
   const [picker, setPicker] = useState<null | 'wickets' | 'overs'>(null);
+
+  // winner dialog
+  const [winnerDialog, setWinnerDialog] = useState(false);
+
+  // capturable score card for image sharing
+  const shareCardRef = useRef<View>(null);
+
+  // racket editing (local until "Update Scores")
+  const [tSets, setTSets] = useState<TennisSet[]>([]);
+  const [tHomePoint, setTHomePoint] = useState(0);
+  const [tAwayPoint, setTAwayPoint] = useState(0);
+  const [savingTennis, setSavingTennis] = useState(false);
 
   const currentUser = auth().currentUser;
   const isLoggedIn = !!currentUser;
 
-  // subscribe to the game
   useEffect(() => {
     if (!id) return;
     const unsub = gamesCollection().doc(id).onSnapshot(
@@ -59,7 +94,21 @@ export default function MatchDetailScreen() {
     return () => unsub();
   }, [id]);
 
-  // subscribe to messages (oldest → newest)
+  useEffect(() => {
+    if (!game) return;
+    if (game.tennis && game.tennis.sets.length) {
+      setTSets(game.tennis.sets.map((s) => ({ ...s })));
+      setTHomePoint(game.tennis.homePoint);
+      setTAwayPoint(game.tennis.awayPoint);
+    } else if (isRacketSport(game.sport)) {
+      const n = game.tennis?.setsFormat === 'Best of 5' ? 5 : 3;
+      setTSets(Array.from({ length: n }, () => ({ home: 0, away: 0 })));
+      setTHomePoint(0);
+      setTAwayPoint(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game?.id]);
+
   useEffect(() => {
     if (!id) return;
     const unsub = messagesCollection(id)
@@ -92,57 +141,73 @@ export default function MatchDetailScreen() {
   const kickoff = game.kickoff?.toDate();
   const isCricket = game.sport === 'Cricket';
   const isRacket = isRacketSport(game.sport);
-  const statuses = statusesForSport(game.sport);
+  const tennisPoints = usesTennisPoints(game.sport);
+  const unit = setUnitLabel(game.sport);
+  const unitLower = unit.toLowerCase();
+
   const cricket: CricketState = game.cricket ?? emptyCricketState();
   const battingSide = cricket.battingSide;
   const activeInnings: CricketInnings | null = battingSide ? cricket[battingSide] : null;
 
-  const tennis: TennisState = game.tennis ?? { setsFormat: 'Best of 3', player1: '', player2: '', homeSets: 0, awaySets: 0 };
+  const tennis: TennisState = game.tennis ?? {
+    setsFormat: 'Best of 3', player1: '', player2: '',
+    sets: Array.from({ length: 3 }, () => ({ home: 0, away: 0 })),
+    homePoint: 0, awayPoint: 0,
+  };
 
-  // --- score with confirmation (non-cricket, non-racket) ---
+  const statuses = statusesForSport(game.sport);
+  const finishedStatus = finishedStatusForSport(game.sport);
+
+  const p1Name = tennis.player1 || game.homeTeam.name;
+  const p2Name = tennis.player2 || game.awayTeam.name;
+
+  // --- numeric field edit that strips a leading zero ---
+  const cleanNum = (v: string): number => {
+    // remove non-digits, strip leading zeros, empty => 0
+    const digits = v.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+    return digits === '' ? 0 : parseInt(digits, 10);
+  };
+
+  // --- default sports score ---
   const changeScore = (side: 'home' | 'away', delta: number) => {
     const newHome = side === 'home' ? Math.max(0, (game.homeScore ?? 0) + delta) : (game.homeScore ?? 0);
     const newAway = side === 'away' ? Math.max(0, (game.awayScore ?? 0) + delta) : (game.awayScore ?? 0);
-    if (newHome === game.homeScore && newAway === game.awayScore) return; // no-op (e.g. minus at 0)
+    if (newHome === game.homeScore && newAway === game.awayScore) return;
 
     const verb = delta > 0 ? 'increase' : 'decrease';
     const teamName = side === 'home' ? game.homeTeam.name : game.awayTeam.name;
-    Alert.alert(
-      'Update Score',
-      `Are you sure you want to ${verb} ${teamName}'s score?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: () => updateGameScore(game.id, newHome, newAway, game).catch(() => Alert.alert('Error', 'Could not update score.')),
-        },
-      ]
-    );
-  };
-
-  // --- tennis / padel: change a side's set count ---
-  const maxSets = tennis.setsFormat === 'Best of 5' ? 5 : 3;
-  const setsToWin = Math.ceil(maxSets / 2); // 2 for best of 3, 3 for best of 5
-
-  const changeSets = (side: 'home' | 'away', delta: number) => {
-    const current = side === 'home' ? tennis.homeSets : tennis.awaySets;
-    const next = Math.max(0, Math.min(setsToWin, current + delta));
-    if (next === current) return;
-
-    const playerName = side === 'home' ? (tennis.player1 || game.homeTeam.name) : (tennis.player2 || game.awayTeam.name);
-    const verb = delta > 0 ? 'add a set to' : 'remove a set from';
-    const nextTennis: TennisState = {
-      ...tennis,
-      homeSets: side === 'home' ? next : tennis.homeSets,
-      awaySets: side === 'away' ? next : tennis.awaySets,
-    };
-    Alert.alert('Update Sets', `Are you sure you want to ${verb} ${playerName}?`, [
+    Alert.alert('Update Score', `Are you sure you want to ${verb} ${teamName}'s score?`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Confirm', onPress: () => updateTennisState(game.id, nextTennis, game).catch(() => Alert.alert('Error', 'Could not update.')) },
+      { text: 'Confirm', onPress: () => updateGameScore(game.id, newHome, newAway, game).catch(() => Alert.alert('Error', 'Could not update score.')) },
     ]);
   };
 
-  // --- cricket: write a patch to the batting side's innings ---
+  // --- racket: commit local edits with confirmation ---
+  const saveTennis = () => {
+    Alert.alert('Update Scores', 'Save these scores?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Confirm',
+        onPress: () => {
+          setSavingTennis(true);
+          const next: TennisState = { ...tennis, sets: tSets, homePoint: tHomePoint, awayPoint: tAwayPoint };
+          updateTennisState(game.id, next, game)
+            .catch(() => Alert.alert('Error', 'Could not update scores.'))
+            .finally(() => setSavingTennis(false));
+        },
+      },
+    ]);
+  };
+
+  const setGameAt = (index: number, side: 'home' | 'away', value: string) => {
+    const n = cleanNum(value);
+    setTSets((prev) => prev.map((s, i) => (i === index ? { ...s, [side]: n } : s)));
+  };
+
+  const liveHomeSets = tSets.filter((s) => s.home > s.away).length;
+  const liveAwaySets = tSets.filter((s) => s.away > s.home).length;
+
+  // --- cricket ---
   const patchInnings = (title: string, msg: string, patch: Partial<CricketInnings>) => {
     if (!battingSide) {
       Alert.alert('Select batting team', 'Choose which team is batting first.');
@@ -155,58 +220,35 @@ export default function MatchDetailScreen() {
       { text: 'Confirm', onPress: () => updateCricketState(game.id, next, game).catch(() => Alert.alert('Error', 'Could not update.')) },
     ]);
   };
-
-  const addRuns = (n: number) => {
-    if (!activeInnings) return;
-    patchInnings('Add Runs', `Add ${n} run${n > 1 ? 's' : ''}?`, { runs: activeInnings.runs + n });
-  };
-
-  const addWicket = () => {
-    if (!activeInnings || activeInnings.wickets >= 10) return;
-    patchInnings('Wicket', 'Record a wicket?', { wickets: activeInnings.wickets + 1 });
-  };
-
+  const addRuns = (n: number) => { if (!activeInnings) return; patchInnings('Add Runs', `Add ${n} run${n > 1 ? 's' : ''}?`, { runs: activeInnings.runs + n }); };
+  const addWicket = () => { if (!activeInnings || activeInnings.wickets >= 10) return; patchInnings('Wicket', 'Record a wicket?', { wickets: activeInnings.wickets + 1 }); };
   const addBall = () => {
     if (!activeInnings) return;
-    // respect the overs cap for this match
     if (cricket.totalOvers > 0 && activeInnings.overs >= cricket.totalOvers) {
       Alert.alert('Overs complete', `This innings has reached its ${cricket.totalOvers}-over limit.`);
       return;
     }
-    let overs = activeInnings.overs;
-    let balls = activeInnings.balls + 1;
+    let overs = activeInnings.overs; let balls = activeInnings.balls + 1;
     if (balls >= 6) { overs += 1; balls = 0; }
     patchInnings('Next Ball', 'Advance one ball?', { overs, balls });
   };
-
   const undoBall = () => {
     if (!activeInnings || (activeInnings.overs === 0 && activeInnings.balls === 0)) return;
-    let overs = activeInnings.overs;
-    let balls = activeInnings.balls - 1;
+    let overs = activeInnings.overs; let balls = activeInnings.balls - 1;
     if (balls < 0) { overs -= 1; balls = 5; }
     patchInnings('Undo Ball', 'Go back one ball?', { overs, balls });
   };
-
-  // --- quick-select: jump wickets or overs to a chosen value ---
   const openPicker = (field: 'wickets' | 'overs') => {
-    if (!battingSide) {
-      Alert.alert('Select batting team', 'Choose which team is batting first.');
-      return;
-    }
+    if (!battingSide) { Alert.alert('Select batting team', 'Choose which team is batting first.'); return; }
     setPicker(field);
   };
-
   const pickValue = (value: number) => {
     if (!picker || !activeInnings) { setPicker(null); return; }
-    const field = picker;
-    setPicker(null);
-    if (activeInnings[field] === value) return; // no change
-
+    const field = picker; setPicker(null);
+    if (activeInnings[field] === value) return;
     const label = field === 'wickets' ? 'wickets' : 'overs';
     patchInnings('Set ' + label[0].toUpperCase() + label.slice(1), `Set ${label} to ${value}?`, { [field]: value });
   };
-
-  // switching batting side only changes which innings is active — no score touched
   const setBatting = (side: 'home' | 'away') => {
     if (cricket.battingSide === side) return;
     const name = side === 'home' ? game.homeTeam.name : game.awayTeam.name;
@@ -216,46 +258,57 @@ export default function MatchDetailScreen() {
     ]);
   };
 
-  // --- status with confirmation ---
+  // --- status change: finished status opens the winner dialog; others confirm normally ---
   const changeStatus = (status: string) => {
     if (status === game.status) return;
-    Alert.alert(
-      'Are you sure you want to make this change live?',
-      `Change match status to "${status}"`,
-      [
-        { text: 'No', style: 'cancel' },
-        {
-          text: 'Yes',
-          onPress: () => updateGameStatus(game.id, status).catch(() => Alert.alert('Error', 'Could not update status.')),
-        },
-      ]
-    );
-  };
-
-  // --- share ---
-  const onShare = async () => {
-    try {
-      let scoreStr: string;
-      if (isCricket) {
-        scoreStr = `${game.homeTeam.name} ${inningsLabel(cricket.home)} · ${game.awayTeam.name} ${inningsLabel(cricket.away)}`;
-      } else if (isRacket) {
-        scoreStr = `${tennis.player1 || game.homeTeam.name} ${tennis.homeSets} - ${tennis.awaySets} ${tennis.player2 || game.awayTeam.name}`;
-      } else {
-        scoreStr = `${game.homeScore ?? 0}:${game.awayScore ?? 0}`;
-      }
-      await Share.share({
-        message: `${game.homeTeam.name} vs ${game.awayTeam.name} — ${scoreStr} (${game.status})`,
-      });
-    } catch {}
-  };
-
-  // --- send message ---
-  const onSend = async () => {
-    if (!draft.trim()) return;
-    if (!isLoggedIn && !guestName.trim()) {
-      Alert.alert('Name required', 'Please enter your name to post a message.');
+    if (status === finishedStatus) {
+      setWinnerDialog(true);
       return;
     }
+    Alert.alert('Are you sure you want to make this change live?', `Change match status to "${status}"`, [
+      { text: 'No', style: 'cancel' },
+      { text: 'Yes', onPress: () => updateGameStatus(game.id, status).catch(() => Alert.alert('Error', 'Could not update status.')) },
+    ]);
+  };
+
+  const chooseWinner = (winner: string) => {
+    setWinnerDialog(false);
+    setWinnerAndFinish(game.id, winner, game.sport).catch(() => Alert.alert('Error', 'Could not finalize the match.'));
+  };
+
+  // --- share (image of the score card, falling back to text) ---
+  const shareText = () => {
+    let scoreStr: string;
+    if (isCricket) {
+      scoreStr = `${game.homeTeam.name} ${inningsLabel(cricket.home)} · ${game.awayTeam.name} ${inningsLabel(cricket.away)}`;
+    } else if (isRacket) {
+      scoreStr = `${p1Name} ${liveHomeSets} - ${liveAwaySets} ${p2Name} (${unitLower}s)`;
+    } else {
+      scoreStr = `${game.homeScore ?? 0}:${game.awayScore ?? 0}`;
+    }
+    return `${game.homeTeam.name} vs ${game.awayTeam.name} — ${scoreStr} (${game.status})`;
+  };
+
+  const onShare = async () => {
+    try {
+      const uri = await captureRef(shareCardRef, { format: 'png', quality: 1 });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: shareText() });
+        return;
+      }
+    } catch {
+      // capture failed — fall through to text
+    }
+    try {
+      await Share.share({ message: shareText() });
+    } catch {
+      // dismissed
+    }
+  };
+
+  const onSend = async () => {
+    if (!draft.trim()) return;
+    if (!isLoggedIn && !guestName.trim()) { Alert.alert('Name required', 'Please enter your name to post a message.'); return; }
     setSending(true);
     try {
       const name = isLoggedIn ? (currentUser?.displayName || currentUser?.phoneNumber || 'User') : guestName;
@@ -264,23 +317,16 @@ export default function MatchDetailScreen() {
     } catch (e) {
       console.error('Send message error:', e);
       Alert.alert('Error', 'Could not send message.');
-    } finally {
-      setSending(false);
-    }
+    } finally { setSending(false); }
   };
 
-  // --- report on long-press ---
   const onReport = (msg: ChatMessage) => {
     Alert.alert('Report message', `Report this message from ${msg.authorName}?`, [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Report',
-        style: 'destructive',
-        onPress: () =>
-          reportMessage(game.id, msg, currentUser?.uid ?? null)
-            .then(() => Alert.alert('Reported', 'Thanks — this message has been reported.'))
-            .catch(() => Alert.alert('Error', 'Could not report the message.')),
-      },
+      { text: 'Report', style: 'destructive',
+        onPress: () => reportMessage(game.id, msg, currentUser?.uid ?? null)
+          .then(() => Alert.alert('Reported', 'Thanks — this message has been reported.'))
+          .catch(() => Alert.alert('Error', 'Could not report the message.')) },
     ]);
   };
 
@@ -292,13 +338,17 @@ export default function MatchDetailScreen() {
 
   const TeamCol = ({ side }: { side: Game['homeTeam'] }) => {
     const logo = logoFor(side.id);
+    const isWinner = !!game.winner && game.winner === side.name;
     return (
       <View style={styles.teamCol}>
         <View style={[styles.logoWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {logo ? <Image source={{ uri: logo }} style={styles.logo} cachePolicy="memory-disk" transition={150} placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }} />
                 : <Text style={styles.logoFallback} numberOfLines={1}>{side.name}</Text>}
         </View>
-        <Text style={[styles.teamName, { color: colors.text }]} numberOfLines={1}>{side.name}</Text>
+        <View style={styles.teamNameRow}>
+          {isWinner && <Ionicons name="trophy" size={14} color="#f59e0b" style={{ marginRight: 4 }} />}
+          <Text style={[styles.teamName, { color: colors.text }]} numberOfLines={1}>{side.name}</Text>
+        </View>
         <View style={[styles.levelPill, { backgroundColor: theme === 'dark' ? '#2a2a2d' : '#e5e5ea' }]}>
           <Text style={[styles.levelPillText, { color: colors.textMuted }]}>{sideLabel(side)}</Text>
         </View>
@@ -306,12 +356,11 @@ export default function MatchDetailScreen() {
     );
   };
 
-  // options for the active picker
   const oversMax = cricket.totalOvers > 0 ? cricket.totalOvers : 50;
   const pickerOptions =
     picker === 'wickets'
-      ? Array.from({ length: 11 }, (_, i) => i)                 // 0..10
-      : Array.from({ length: oversMax + 1 }, (_, i) => i);      // 0..totalOvers
+      ? Array.from({ length: 11 }, (_, i) => i)
+      : Array.from({ length: oversMax + 1 }, (_, i) => i);
   const currentPickerValue = activeInnings ? (picker === 'wickets' ? activeInnings.wickets : activeInnings.overs) : null;
 
   return (
@@ -342,28 +391,22 @@ export default function MatchDetailScreen() {
           keyExtractor={(m) => m.id}
           ListHeaderComponent={
             <View>
-              {/* Status tabs */}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusRow}>
                 {statuses.map((s) => {
                   const active = s === game.status;
+                  const pulse = active && showsPulse(s);
                   return (
-                    <TouchableOpacity
-                      key={s}
-                      onPress={() => changeStatus(s)}
-                      style={[
-                        styles.statusPill,
-                        { borderColor: colors.border },
-                        active && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
-                      ]}
+                    <TouchableOpacity key={s} onPress={() => changeStatus(s)}
+                      style={[styles.statusPill, { borderColor: colors.border }, active && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }]}
                     >
+                      {pulse && <PulsingDot color="#fff" />}
                       <Text style={[styles.statusText, { color: active ? '#fff' : colors.text }]}>{s}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </ScrollView>
 
-              {/* Score card */}
-              <View style={[styles.scoreCard, { borderColor: colors.border }]}>
+              <View ref={shareCardRef} collapsable={false} style={[styles.scoreCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
                 <View style={styles.matchRow}>
                   <TeamCol side={game.homeTeam} />
                   <Text style={[styles.vs, { color: colors.textMuted }]}>VS</Text>
@@ -374,30 +417,21 @@ export default function MatchDetailScreen() {
                 {isCricket ? (
                   <View>
                     {cricket.totalOvers > 0 && (
-                      <Text style={[styles.oversCap, { color: colors.textMuted }]}>
-                        {cricket.totalOvers} overs per side
-                      </Text>
+                      <Text style={[styles.capLabel, { color: colors.textMuted }]}>{cricket.totalOvers} overs per side</Text>
                     )}
-
-                    {/* Batting toggle */}
                     <View style={styles.battingRow}>
                       {(['home', 'away'] as const).map((s) => {
                         const active = cricket.battingSide === s;
                         const name = s === 'home' ? game.homeTeam.name : game.awayTeam.name;
                         return (
-                          <TouchableOpacity
-                            key={s}
-                            onPress={() => setBatting(s)}
-                            style={[styles.battingPill, { borderColor: colors.border }, active && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }]}
-                          >
+                          <TouchableOpacity key={s} onPress={() => setBatting(s)}
+                            style={[styles.battingPill, { borderColor: colors.border }, active && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }]}>
                             <Ionicons name="baseball-outline" size={14} color={active ? '#fff' : colors.textMuted} style={{ marginRight: 6 }} />
                             <Text style={[styles.battingText, { color: active ? '#fff' : colors.text }]} numberOfLines={1}>{name}</Text>
                           </TouchableOpacity>
                         );
                       })}
                     </View>
-
-                    {/* Both innings side by side; batting one highlighted */}
                     <View style={styles.inningsRow}>
                       {(['home', 'away'] as const).map((s) => {
                         const inn = cricket[s];
@@ -412,10 +446,8 @@ export default function MatchDetailScreen() {
                         );
                       })}
                     </View>
-
                     {battingSide ? (
                       <>
-                        {/* Run buttons */}
                         <View style={styles.runRow}>
                           {[1, 2, 3, 4, 6].map((n) => (
                             <TouchableOpacity key={n} style={[styles.runBtn, { borderColor: colors.border }]} onPress={() => addRuns(n)}>
@@ -423,14 +455,8 @@ export default function MatchDetailScreen() {
                             </TouchableOpacity>
                           ))}
                         </View>
-
-                        {/* Wicket + over controls (tap to increment, long-press for quick set) */}
                         <View style={styles.cricketActionRow}>
-                          <TouchableOpacity
-                            style={[styles.cricketAction, { borderColor: '#ef4444' }]}
-                            onPress={addWicket}
-                            onLongPress={() => openPicker('wickets')}
-                          >
+                          <TouchableOpacity style={[styles.cricketAction, { borderColor: '#ef4444' }]} onPress={addWicket} onLongPress={() => openPicker('wickets')}>
                             <Text style={[styles.cricketActionText, { color: '#ef4444' }]}>Wicket</Text>
                           </TouchableOpacity>
                           <TouchableOpacity style={[styles.cricketAction, { borderColor: colors.border }]} onPress={undoBall}>
@@ -441,8 +467,6 @@ export default function MatchDetailScreen() {
                             <Text style={[styles.cricketActionText, { color: '#fff' }]}>Next Ball</Text>
                           </TouchableOpacity>
                         </View>
-
-                        {/* Quick-set row */}
                         <View style={styles.quickRow}>
                           <TouchableOpacity style={[styles.quickBtn, { borderColor: colors.border }]} onPress={() => openPicker('wickets')}>
                             <Ionicons name="list-outline" size={14} color={colors.textMuted} style={{ marginRight: 6 }} />
@@ -462,38 +486,94 @@ export default function MatchDetailScreen() {
                   </View>
                 ) : isRacket ? (
                   <View>
-                    <Text style={[styles.oversCap, { color: colors.textMuted }]}>
-                      {tennis.setsFormat} · first to {setsToWin} sets
-                    </Text>
+                    <Text style={[styles.capLabel, { color: colors.textMuted }]}>{tennis.setsFormat}</Text>
 
-                    {/* Players + set counters */}
-                    <View style={styles.setsRow}>
-                      {/* Player 1 (home) */}
-                      <View style={styles.setsCol}>
-                        <Text style={[styles.playerName, { color: colors.text }]} numberOfLines={1}>
-                          {tennis.player1 || game.homeTeam.name}
-                        </Text>
-                        <View style={styles.setControls}>
-                          <ScoreButton symbol="–" onPress={() => changeSets('home', -1)} />
-                          <Text style={[styles.setNum, { color: colors.text }]}>{tennis.homeSets}</Text>
-                          <ScoreButton symbol="+" onPress={() => changeSets('home', +1)} />
-                        </View>
-                      </View>
-
-                      <Text style={[styles.setsDivider, { color: colors.textMuted }]}>sets</Text>
-
-                      {/* Player 2 (away) */}
-                      <View style={styles.setsCol}>
-                        <Text style={[styles.playerName, { color: colors.text }]} numberOfLines={1}>
-                          {tennis.player2 || game.awayTeam.name}
-                        </Text>
-                        <View style={styles.setControls}>
-                          <ScoreButton symbol="–" onPress={() => changeSets('away', -1)} />
-                          <Text style={[styles.setNum, { color: colors.text }]}>{tennis.awaySets}</Text>
-                          <ScoreButton symbol="+" onPress={() => changeSets('away', +1)} />
-                        </View>
-                      </View>
+                    <Text style={[styles.tSectionLabel, { color: colors.text }]}>UPDATE {unit.toUpperCase()} SCORES</Text>
+                    <View style={styles.tHeaderRow}>
+                      <View style={{ width: 54 }} />
+                      <Text style={[styles.tPlayerHead, { color: colors.text }]} numberOfLines={1}>{p1Name}</Text>
+                      <View style={{ width: 24 }} />
+                      <Text style={[styles.tPlayerHead, { color: colors.text }]} numberOfLines={1}>{p2Name}</Text>
                     </View>
+
+                    {tSets.map((s, i) => (
+                      <View key={i} style={styles.tSetRow}>
+                        <Text style={[styles.tSetLabel, { color: colors.textMuted }]}>{unit} {i + 1}</Text>
+                        <TextInput
+                          style={[styles.tSetInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                          keyboardType="number-pad" value={String(s.home)} onChangeText={(v) => setGameAt(i, 'home', v)} selectTextOnFocus
+                        />
+                        <Text style={[styles.tDash, { color: colors.textMuted }]}>–</Text>
+                        <TextInput
+                          style={[styles.tSetInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
+                          keyboardType="number-pad" value={String(s.away)} onChangeText={(v) => setGameAt(i, 'away', v)} selectTextOnFocus
+                        />
+                      </View>
+                    ))}
+
+                    <View style={styles.tSetsWonRow}>
+                      <Text style={[styles.tSetsWon, { color: colors.text }]}>{liveHomeSets} {unitLower}s</Text>
+                      <Text style={[styles.tSetsWonLabel, { color: colors.textMuted }]}>{unit.toUpperCase()}S WON</Text>
+                      <Text style={[styles.tSetsWon, { color: colors.text }]}>{liveAwaySets} {unitLower}s</Text>
+                    </View>
+
+                    {tennisPoints ? (
+                      <>
+                        <Text style={[styles.tSectionLabel, { color: colors.text, marginTop: 18 }]}>
+                          CURRENT GAME SCORE{'  '}
+                          <Text style={{ color: colors.textMuted }}>
+                            {TENNIS_POINT_LABELS[tHomePoint]} – {TENNIS_POINT_LABELS[tAwayPoint]}
+                          </Text>
+                        </Text>
+                        <Text style={[styles.tPointName, { color: colors.text }]}>{p1Name}</Text>
+                        <View style={styles.tPointRow}>
+                          {TENNIS_POINT_LABELS.map((lbl, i) => (
+                            <TouchableOpacity key={lbl} onPress={() => setTHomePoint(i)}
+                              style={[styles.tPointBtn, { borderColor: colors.border }, tHomePoint === i && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }]}>
+                              <Text style={[styles.tPointText, { color: tHomePoint === i ? '#fff' : colors.text }]}>{lbl}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                        <Text style={[styles.tPointName, { color: colors.text }]}>{p2Name}</Text>
+                        <View style={styles.tPointRow}>
+                          {TENNIS_POINT_LABELS.map((lbl, i) => (
+                            <TouchableOpacity key={lbl} onPress={() => setTAwayPoint(i)}
+                              style={[styles.tPointBtn, { borderColor: colors.border }, tAwayPoint === i && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }]}>
+                              <Text style={[styles.tPointText, { color: tAwayPoint === i ? '#fff' : colors.text }]}>{lbl}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={[styles.tSectionLabel, { color: colors.text, marginTop: 18 }]}>
+                          CURRENT {unit.toUpperCase()} SCORE (IN PROGRESS)
+                        </Text>
+                        <View style={styles.curScoreRow}>
+                          <View style={styles.curScoreCol}>
+                            <Text style={[styles.curScoreName, { color: colors.text }]} numberOfLines={1}>{p1Name}</Text>
+                            <View style={styles.curScoreControls}>
+                              <ScoreButton symbol="–" onPress={() => setTHomePoint(Math.max(0, tHomePoint - 1))} />
+                              <Text style={[styles.curScoreNum, { color: colors.text }]}>{tHomePoint}</Text>
+                              <ScoreButton symbol="+" onPress={() => setTHomePoint(tHomePoint + 1)} />
+                            </View>
+                          </View>
+                          <Text style={[styles.curScoreDash, { color: colors.textMuted }]}>–</Text>
+                          <View style={styles.curScoreCol}>
+                            <Text style={[styles.curScoreName, { color: colors.text }]} numberOfLines={1}>{p2Name}</Text>
+                            <View style={styles.curScoreControls}>
+                              <ScoreButton symbol="–" onPress={() => setTAwayPoint(Math.max(0, tAwayPoint - 1))} />
+                              <Text style={[styles.curScoreNum, { color: colors.text }]}>{tAwayPoint}</Text>
+                              <ScoreButton symbol="+" onPress={() => setTAwayPoint(tAwayPoint + 1)} />
+                            </View>
+                          </View>
+                        </View>
+                      </>
+                    )}
+
+                    <TouchableOpacity style={[styles.tUpdateBtn, savingTennis && { opacity: 0.6 }]} onPress={saveTennis} disabled={savingTennis}>
+                      {savingTennis ? <ActivityIndicator color="#fff" /> : <Text style={styles.tUpdateText}>Update Scores</Text>}
+                    </TouchableOpacity>
                   </View>
                 ) : (
                   <View style={styles.scoreControls}>
@@ -508,7 +588,6 @@ export default function MatchDetailScreen() {
                 )}
               </View>
 
-              {/* Date / time / location */}
               <View style={styles.metaRow}>
                 <Ionicons name="calendar-outline" size={15} color={colors.textMuted} />
                 <Text style={[styles.metaText, { color: colors.textMuted }]}>
@@ -522,7 +601,6 @@ export default function MatchDetailScreen() {
                 <Text style={[styles.metaText, { color: colors.textMuted }]} numberOfLines={1}>{game.location}</Text>
               </View>
 
-              {/* Chat header */}
               <View style={styles.chatHeader}>
                 <Text style={[styles.chatTitle, { color: colors.text }]}>Match Chat</Text>
               </View>
@@ -553,25 +631,19 @@ export default function MatchDetailScreen() {
           showsVerticalScrollIndicator={false}
         />
 
-        {/* Composer */}
         <View style={[styles.composer, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
           {!isLoggedIn && (
             <TextInput
               style={[styles.nameInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
-              placeholder="Your name"
-              placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
-              value={guestName}
-              onChangeText={setGuestName}
+              placeholder="Your name" placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+              value={guestName} onChangeText={setGuestName}
             />
           )}
           <View style={styles.composerRow}>
             <TextInput
               style={[styles.msgInput, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
-              placeholder="Type a message..."
-              placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
-              value={draft}
-              onChangeText={setDraft}
-              multiline
+              placeholder="Type a message..." placeholderTextColor={theme === 'dark' ? '#555' : '#aaa'}
+              value={draft} onChangeText={setDraft} multiline
             />
             <TouchableOpacity style={[styles.sendBtn, sending && { opacity: 0.6 }]} onPress={onSend} disabled={sending}>
               {sending ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="send" size={18} color="#fff" />}
@@ -579,29 +651,20 @@ export default function MatchDetailScreen() {
           </View>
         </View>
 
-        {/* Quick-select picker modal (wickets / overs) */}
+        {/* Quick-select picker modal */}
         <Modal visible={picker !== null} transparent animationType="fade" onRequestClose={() => setPicker(null)}>
           <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setPicker(null)}>
             <View style={[styles.pickerCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
-              <Text style={[styles.pickerTitle, { color: colors.text }]}>
-                {picker === 'wickets' ? 'Set Wickets' : 'Set Overs'}
-              </Text>
+              <Text style={[styles.pickerTitle, { color: colors.text }]}>{picker === 'wickets' ? 'Set Wickets' : 'Set Overs'}</Text>
               <FlatList
-                data={pickerOptions}
-                keyExtractor={(n) => String(n)}
-                numColumns={5}
+                data={pickerOptions} keyExtractor={(n) => String(n)} numColumns={5}
                 columnWrapperStyle={{ justifyContent: 'space-between' }}
                 renderItem={({ item }) => {
                   const selected = item === currentPickerValue;
                   return (
                     <TouchableOpacity
-                      style={[
-                        styles.pickerCell,
-                        { borderColor: colors.border },
-                        selected && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
-                      ]}
-                      onPress={() => pickValue(item)}
-                    >
+                      style={[styles.pickerCell, { borderColor: colors.border }, selected && { backgroundColor: '#3b82f6', borderColor: '#3b82f6' }]}
+                      onPress={() => pickValue(item)}>
                       <Text style={[styles.pickerCellText, { color: selected ? '#fff' : colors.text }]}>{item}</Text>
                     </TouchableOpacity>
                   );
@@ -610,6 +673,51 @@ export default function MatchDetailScreen() {
               />
             </View>
           </TouchableOpacity>
+        </Modal>
+
+        {/* Winner dialog */}
+        <Modal visible={winnerDialog} transparent animationType="fade" onRequestClose={() => setWinnerDialog(false)}>
+          <View style={styles.winnerOverlay}>
+            <View style={[styles.winnerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.winnerTitle, { color: colors.text }]}>Which team won?</Text>
+              <Text style={[styles.winnerSub, { color: colors.textMuted }]}>
+                Select the winning team to mark this match as {finishedStatus}
+              </Text>
+
+              <TouchableOpacity
+                style={[styles.winnerOption, { borderColor: colors.border }]}
+                onPress={() => chooseWinner(game.homeTeam.name)}
+              >
+                <Ionicons name="trophy-outline" size={20} color="#f59e0b" style={{ marginRight: 12 }} />
+                <Text style={[styles.winnerName, { color: colors.text }]} numberOfLines={1}>{game.homeTeam.name}</Text>
+                <View style={{ flex: 1 }} />
+                <Text style={[styles.winnerSide, { color: colors.textMuted }]}>Left</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.winnerOption, { borderColor: colors.border }]}
+                onPress={() => chooseWinner(game.awayTeam.name)}
+              >
+                <Ionicons name="trophy-outline" size={20} color="#f59e0b" style={{ marginRight: 12 }} />
+                <Text style={[styles.winnerName, { color: colors.text }]} numberOfLines={1}>{game.awayTeam.name}</Text>
+                <View style={{ flex: 1 }} />
+                <Text style={[styles.winnerSide, { color: colors.textMuted }]}>Right</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.winnerOption, { borderColor: colors.border }]}
+                onPress={() => chooseWinner('Draw / No Winner')}
+              >
+                <Text style={[styles.winnerName, { color: colors.text }]}>Draw / No Winner</Text>
+              </TouchableOpacity>
+
+              <View style={styles.winnerFooter}>
+                <TouchableOpacity style={[styles.winnerCancel, { borderColor: colors.border }]} onPress={() => setWinnerDialog(false)}>
+                  <Text style={[styles.winnerCancelText, { color: colors.text }]}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
         </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -628,7 +736,7 @@ const styles = StyleSheet.create({
   closeBtn: { marginLeft: 8, flexShrink: 0 },
 
   statusRow: { paddingVertical: 12, gap: 8 },
-  statusPill: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, marginRight: 8 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, marginRight: 8 },
   statusText: { fontSize: 14, fontWeight: '600' },
 
   scoreCard: { borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 12 },
@@ -637,7 +745,8 @@ const styles = StyleSheet.create({
   logoWrap: { width: 84, height: 84, borderRadius: 12, borderWidth: 1, justifyContent: 'center', alignItems: 'center', overflow: 'hidden', marginBottom: 10 },
   logo: { width: '100%', height: '100%', resizeMode: 'cover' },
   logoFallback: { fontSize: 18, fontWeight: 'bold', color: '#3b82f6', paddingHorizontal: 6, textAlign: 'center' },
-  teamName: { fontSize: 16, fontWeight: 'bold', marginBottom: 6 },
+  teamNameRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  teamName: { fontSize: 16, fontWeight: 'bold' },
   levelPill: { borderRadius: 6, paddingHorizontal: 10, paddingVertical: 3 },
   levelPillText: { fontSize: 13, fontWeight: '600' },
   vs: { fontSize: 20, fontWeight: '600', paddingHorizontal: 8 },
@@ -647,9 +756,8 @@ const styles = StyleSheet.create({
   scoreBtnText: { fontSize: 22, fontWeight: '600' },
   scoreNum: { fontSize: 40, fontWeight: 'bold', minWidth: 60, textAlign: 'center' },
 
-  oversCap: { fontSize: 12, fontWeight: '600', textAlign: 'center', marginBottom: 12 },
+  capLabel: { fontSize: 12, fontWeight: '600', textAlign: 'center', marginBottom: 12 },
 
-  // cricket
   battingRow: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16, gap: 8 },
   battingPill: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, maxWidth: '46%' },
   battingText: { fontSize: 13, fontWeight: '600' },
@@ -668,20 +776,47 @@ const styles = StyleSheet.create({
   quickBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 },
   quickBtnText: { fontSize: 13, fontWeight: '600' },
 
-  // tennis / padel
-  setsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  setsCol: { flex: 1, alignItems: 'center' },
-  playerName: { fontSize: 15, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
-  setControls: { flexDirection: 'row', alignItems: 'center' },
-  setNum: { fontSize: 36, fontWeight: 'bold', minWidth: 50, textAlign: 'center' },
-  setsDivider: { fontSize: 13, fontWeight: '600', paddingHorizontal: 6 },
+  tSectionLabel: { fontSize: 13, fontWeight: 'bold', marginBottom: 10 },
+  tHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  tPlayerHead: { flex: 1, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  tSetRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  tSetLabel: { width: 54, fontSize: 13 },
+  tSetInput: { flex: 1, borderWidth: 1, borderRadius: 8, paddingVertical: 10, fontSize: 15, textAlign: 'center' },
+  tDash: { paddingHorizontal: 10, fontSize: 16 },
+  tSetsWonRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 16, marginTop: 8, marginBottom: 4 },
+  tSetsWon: { fontSize: 14, fontWeight: 'bold' },
+  tSetsWonLabel: { fontSize: 12, fontWeight: '600' },
+  tPointName: { fontSize: 13, fontWeight: '600', marginTop: 10, marginBottom: 6 },
+  tPointRow: { flexDirection: 'row', gap: 8 },
+  tPointBtn: { flex: 1, borderWidth: 1, borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
+  tPointText: { fontSize: 13, fontWeight: '600' },
+  tUpdateBtn: { backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 14, alignItems: 'center', marginTop: 20 },
+  tUpdateText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
 
-  // picker modal
+  curScoreRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+  curScoreCol: { flex: 1, alignItems: 'center' },
+  curScoreName: { fontSize: 14, fontWeight: '600', marginBottom: 10, textAlign: 'center' },
+  curScoreControls: { flexDirection: 'row', alignItems: 'center' },
+  curScoreNum: { fontSize: 34, fontWeight: 'bold', minWidth: 46, textAlign: 'center' },
+  curScoreDash: { fontSize: 20, paddingHorizontal: 6 },
+
   pickerOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 24 },
   pickerCard: { width: '100%', maxWidth: 340, borderRadius: 16, borderWidth: 1, padding: 16, maxHeight: '70%' },
   pickerTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' },
   pickerCell: { width: '18%', aspectRatio: 1, borderWidth: 1, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
   pickerCellText: { fontSize: 16, fontWeight: '600' },
+
+  // winner dialog
+  winnerOverlay: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.6)' },
+  winnerCard: { borderRadius: 16, borderWidth: 1, padding: 20 },
+  winnerTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 8 },
+  winnerSub: { fontSize: 14, marginBottom: 20, lineHeight: 20 },
+  winnerOption: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 16, marginBottom: 12 },
+  winnerName: { fontSize: 16, fontWeight: '600' },
+  winnerSide: { fontSize: 14 },
+  winnerFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 4 },
+  winnerCancel: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 24, paddingVertical: 12 },
+  winnerCancelText: { fontSize: 15, fontWeight: '600' },
 
   metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', marginBottom: 16 },
   metaText: { fontSize: 13, marginLeft: 5 },
