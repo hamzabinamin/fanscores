@@ -55,6 +55,11 @@ export function usesTennisPoints(sport: string): boolean {
 export function setUnitLabel(sport: string): string {
   return sport === 'Badminton' ? 'Game' : 'Set';
 }
+// status label for a 0-based set index, respecting sport wording (Set N vs Game N)
+export function setStatusFor(sport: string, index: number): string {
+  const n = index + 1;
+  return sport === 'Badminton' ? `Game ${n}` : `Set ${n}`;
+}
 
 export const QUARTER_SPORTS = ['Netball', 'Water Polo'];
 
@@ -99,9 +104,7 @@ export type TennisStatus = typeof TENNIS_STATUSES[number];
 export type QuarterStatus = typeof QUARTER_STATUSES[number];
 export type BasketballStatus = typeof BASKETBALL_STATUSES[number];
 
-// statuses that are NOT live (no pulsing dot anywhere)
 export const NON_LIVE_STATUSES = ['Not Started', 'Upcoming'];
-// statuses that count as "finished" (home screen: muted, no pulse; detail: no pulse)
 export const FINISHED_STATUSES = ['Full Time', 'Completed', 'Finished'];
 
 export function isLiveStatus(status: string): boolean {
@@ -110,7 +113,6 @@ export function isLiveStatus(status: string): boolean {
 export function isFinishedStatus(status: string): boolean {
   return FINISHED_STATUSES.includes(status);
 }
-// detail screen: pulse for anything except Not Started/Upcoming (including live AND finished? no — finished no pulse)
 export function showsPulse(status: string): boolean {
   return !NON_LIVE_STATUSES.includes(status) && !FINISHED_STATUSES.includes(status);
 }
@@ -200,6 +202,8 @@ export function emptyTennisState(format: string, p1: string, p2: string): Tennis
   };
 }
 
+// Sets/games won: each row goes to whoever's number is higher. No legality check.
+// e.g. 6-3, 4-6, 6-2 => home 2, away 1.
 export function tennisSetsWon(t: TennisState): { home: number; away: number } {
   let home = 0, away = 0;
   for (const s of t.sets) {
@@ -212,6 +216,15 @@ export function tennisSetsWon(t: TennisState): { home: number; away: number } {
 // per-set line for the home card, e.g. "1-2 0-0 0-0 0-0 0-0"
 export function tennisSetLine(t: TennisState): string {
   return t.sets.map((s) => `${s.home}-${s.away}`).join(' ');
+}
+
+// the "current" set index — the last set with any score entered (0-based)
+function currentSetIndex(t: TennisState): number {
+  let lastWithScore = -1;
+  for (let i = 0; i < t.sets.length; i++) {
+    if (t.sets[i].home > 0 || t.sets[i].away > 0) lastWithScore = i;
+  }
+  return Math.max(0, lastWithScore);
 }
 
 export function statusesForSport(sport: string): readonly string[] {
@@ -232,7 +245,6 @@ export function firstActiveStatus(sport: string): string {
   return '1st Half';
 }
 
-// the "completed/final" status for a sport (what the winner dialog sets)
 export function finishedStatusForSport(sport: string): string {
   if (sport === 'Cricket') return 'Finished';
   if (isRacketSport(sport)) return 'Completed';
@@ -257,7 +269,10 @@ export async function updateCricketState(gameId: string, cricket: CricketState, 
 
 export async function updateTennisState(gameId: string, tennis: TennisState, game: Game) {
   const patch: Record<string, any> = { tennis, lastUpdatedBy: currentUid() };
-  if (game.status === 'Not Started') patch.status = firstActiveStatus(game.sport);
+  // auto-advance from "Not Started" to the set the scorer is actually working on
+  if (game.status === 'Not Started') {
+    patch.status = setStatusFor(game.sport, currentSetIndex(tennis));
+  }
   await gamesCollection().doc(gameId).update(patch);
 }
 
@@ -265,7 +280,6 @@ export async function deleteGame(gameId: string) {
   await gamesCollection().doc(gameId).delete();
 }
 
-// set winner + finished status in one write (used by the "Which team won?" dialog)
 export async function setWinnerAndFinish(gameId: string, winner: string, sport: string) {
   await gamesCollection().doc(gameId).update({
     winner,

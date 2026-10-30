@@ -139,20 +139,20 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
       onPress={() => router.push(`/match/${game.id}`)}
     >
       <View ref={cardRef} collapsable={false} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        {/* Header */}
+        {/* Header — sport, gender, status all left-aligned; tick pinned right */}
         <View style={styles.headerRow}>
-          <Text style={styles.sport}>{game.sport.toUpperCase()}</Text>
+          <Text style={styles.sport} numberOfLines={1}>{game.sport.toUpperCase()}</Text>
           <View style={[styles.pill, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
             <Text style={[styles.pillText, { color: colors.text }]}>{game.gender}</Text>
           </View>
           {live ? (
             <View style={styles.livePill}>
               <PulsingDot color="#fff" />
-              <Text style={styles.liveText}>{game.status}</Text>
+              <Text style={styles.liveText} numberOfLines={1}>{game.status}</Text>
             </View>
           ) : (
             <View style={[styles.pill, { backgroundColor: theme === 'dark' ? '#2a2a2d' : '#e5e5ea' }]}>
-              <Text style={[styles.pillText, { color: colors.textMuted }]}>{game.status}</Text>
+              <Text style={[styles.pillText, { color: colors.textMuted }]} numberOfLines={1}>{game.status}</Text>
             </View>
           )}
           <View style={{ flex: 1 }} />
@@ -234,13 +234,14 @@ export default function FixtureCard({ game, teams }: FixtureCardProps) {
 const styles = StyleSheet.create({
   card: { borderRadius: 16, borderWidth: 1, padding: 16, marginBottom: 16 },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  sport: { color: '#3b82f6', fontWeight: 'bold', fontSize: 14, marginRight: 10 },
-  pill: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4, marginRight: 8, borderWidth: StyleSheet.hairlineWidth },
-  pillText: { fontSize: 13, fontWeight: '600' },
+  pillNoMargin: { marginRight: 0 },
+  sport: { color: '#3b82f6', fontWeight: 'bold', fontSize: 12, marginRight: 8 },
+  pill: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginRight: 6, borderWidth: StyleSheet.hairlineWidth },
+  pillText: { fontSize: 11, fontWeight: '600' },
 
-  livePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ef4444', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4, marginRight: 8 },
-  liveDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  liveText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  livePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ef4444', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginRight: 6 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  liveText: { color: '#fff', fontSize: 11, fontWeight: '600' },
 
   matchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   teamBlock: { flex: 1, alignItems: 'center' },
